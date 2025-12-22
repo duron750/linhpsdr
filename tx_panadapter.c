@@ -210,7 +210,8 @@ void update_tx_panadapter(RADIO *r) {
             cairo_stroke(cr);
 
             cairo_set_font_size(cr, 14);
-            SetColour(cr, 3); // TEXT_C
+	    //SetColour(cr, 3); // TEXT_C
+	    cairo_set_source_rgb(cr, 1.0, 1.0, 0.0); // GALBEN aprins (vizibilitate maxim¿)
             sprintf(text, "%.1f W", tx->fwd);
             cairo_move_to(cr, width - 100, 40);
             cairo_show_text(cr, text);
