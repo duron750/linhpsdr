@@ -59,4 +59,8 @@ W4WHL
   sudo make install
   
 ```
+Added by duron750:
+- add keyboard shortcuts for fine and coarse frequency change using arrow keys
+
+
 
