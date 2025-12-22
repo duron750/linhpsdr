@@ -386,6 +386,47 @@ gboolean retry_cb(GtkWidget *widget,gpointer data) {
   g_idle_add(discover,NULL);
   return TRUE;
 }
+//enter frequency manually
+void open_frequency_entry() {
+    GtkWidget *dialog, *content_area, *entry;
+    GtkDialogFlags flags = GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT;
+    
+    // Am înlocuit GTK_WINDOW(window) cu NULL pentru a evita eroarea de compilare
+    dialog = gtk_dialog_new_with_buttons("Set Frequency (MHz)",
+                                        NULL, 
+                                        flags,
+                                        "_OK", GTK_RESPONSE_OK,
+                                        "_Cancel", GTK_RESPONSE_CANCEL,
+                                        NULL);
+                                        
+    content_area = gtk_dialog_get_content_area(GTK_DIALOG(dialog));
+    
+    // Adăugăm un pic de spațiu (padding) ca să nu arate înghesuit
+    gtk_container_set_border_width(GTK_CONTAINER(content_area), 15);
+    
+    entry = gtk_entry_new();
+    gtk_entry_set_placeholder_text(GTK_ENTRY(entry), "Ex: 7.150");
+    
+    // Permite apăsarea tastei Enter pentru a confirma (OK)
+    gtk_entry_set_activates_default(GTK_ENTRY(entry), TRUE);
+    gtk_dialog_set_default_response(GTK_DIALOG(dialog), GTK_RESPONSE_OK);
+
+    gtk_container_add(GTK_CONTAINER(content_area), entry);
+    gtk_widget_show_all(dialog);
+
+    if (gtk_dialog_run(GTK_DIALOG(dialog)) == GTK_RESPONSE_OK) {
+        const char *text = gtk_entry_get_text(GTK_ENTRY(entry));
+        if (text && strlen(text) > 0) {
+            double mhz = atof(text);
+            if (mhz > 0 && radio != NULL && radio->receiver[0] != NULL) {
+                RECEIVER *rx = radio->receiver[0];
+                rx->frequency_a = (long long)(mhz * 1000000.0);
+                update_frequency(rx);
+            }
+        }
+    }
+    gtk_widget_destroy(dialog);
+}
 //function to change frequency using keyboard
 static gboolean on_key_press(GtkWidget *widget, GdkEventKey *event, gpointer user_data) {
     if (radio == NULL || radio->receiver[0] == NULL) return FALSE;
@@ -406,6 +447,10 @@ static gboolean on_key_press(GtkWidget *widget, GdkEventKey *event, gpointer use
         case GDK_KEY_Down:
             rx->frequency_a -= 1000;
             break;
+	case GDK_KEY_f:
+	case GDK_KEY_F:
+    	    open_frequency_entry();
+    	    return TRUE;
         default:
             return FALSE;
     }

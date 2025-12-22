@@ -61,6 +61,8 @@ W4WHL
 ```
 Added by duron750:
 - add keyboard shortcuts for fine and coarse frequency change using arrow keys
-
-
-
+- Arrow UP: change frequency UP coarse
+- Arrow DOWN: change frequency DOWN coarse
+- Arrow LEFT: change frequency down fine
+- Arrow RIGHT: change frequency up fine
+- F/f: enter frequency manually
