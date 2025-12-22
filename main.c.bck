@@ -386,36 +386,7 @@ gboolean retry_cb(GtkWidget *widget,gpointer data) {
   g_idle_add(discover,NULL);
   return TRUE;
 }
-//function to change frequency using keyboard
-static gboolean on_key_press(GtkWidget *widget, GdkEventKey *event, gpointer user_data) {
-    if (radio == NULL || radio->receiver[0] == NULL) return FALSE;
 
-    RECEIVER *rx = radio->receiver[0];
-    long long step = 100; // Pas de 100 Hz
-
-    switch (event->keyval) {
-        case GDK_KEY_Right:
-            rx->frequency_a += step;
-            break;
-        case GDK_KEY_Left:
-            rx->frequency_a -= step;
-            break;
-        case GDK_KEY_Up:
-            rx->frequency_a += 1000; // Pas de 1 kHz
-            break;
-        case GDK_KEY_Down:
-            rx->frequency_a -= 1000;
-            break;
-        default:
-            return FALSE;
-    }
-
-    // Această funcție este deja declarată în receiver.h (inclus în main.c)
-    // și se ocupă de sincronizarea Panadapter-ului și a hardware-ului.
-    update_frequency(rx);
-    
-    return TRUE;
-}
 gboolean start_cb(GtkWidget *widget,gpointer data) { 
   char v[32];
   char mac[32];
@@ -535,7 +506,6 @@ static void activate_hpsdr(GtkApplication *app, gpointer data) {
   sprintf(png_path,"/usr/share/linhpsdr/hpsdr.png");
 //#endif
   main_window = gtk_application_window_new (app);
-  g_signal_connect(G_OBJECT(main_window), "key-press-event", G_CALLBACK(on_key_press), NULL);
   sprintf(title,"LinHPSDR (%s)",version);
   gtk_window_set_title (GTK_WINDOW (main_window), title);
   gtk_window_set_resizable(GTK_WINDOW(main_window), FALSE);
