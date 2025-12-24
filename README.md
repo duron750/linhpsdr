@@ -110,4 +110,12 @@ Development and testing has been run on MacOS Sierra 10.12.6 and MacOS high Sier
 
 The build installs linHPSDR into `/usr/local/bin`. To run it, type `linhpsdr` on the command line.
 
+### yo5rxm modifications
+
+Added keyboard shortcuts for changing freqnency:
+- right arrow: increase frequency by 1000 Hz
+- left arrow: decrease frequency by 1000 Hz
+- up arrow: increase frequency by 100 Hz
+- down arrow: decrease frequency by 100 Hz
+- F/f: enter frequency manually, in MHz
 
