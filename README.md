@@ -118,4 +118,4 @@ Added keyboard shortcuts for changing freqnency:
 - up arrow: increase frequency by 100 Hz
 - down arrow: decrease frequency by 100 Hz
 - F/f: enter frequency manually, in MHz
-
+- Space: PTT

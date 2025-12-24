@@ -427,12 +427,23 @@ void open_frequency_entry() {
     }
     gtk_widget_destroy(dialog);
 }
+static gboolean on_key_release(GtkWidget *widget, GdkEventKey *event, gpointer user_data) {
+    if (radio == NULL) return FALSE;
+
+    if (event->keyval == GDK_KEY_space) {
+        radio->mox = FALSE;
+        set_mox(radio, FALSE);
+        update_radio(radio);
+        return TRUE;
+    }
+    return FALSE;
+}
 //function to change frequency using keyboard
 static gboolean on_key_press(GtkWidget *widget, GdkEventKey *event, gpointer user_data) {
     if (radio == NULL || radio->receiver[0] == NULL) return FALSE;
-
+    RADIO *r = radio;
     RECEIVER *rx = radio->receiver[0];
-    long long step = 100; // Pas de 100 Hz
+    long long step = rx->step; // Pas de 100 Hz
 
     switch (event->keyval) {
         case GDK_KEY_Right:
@@ -451,6 +462,13 @@ static gboolean on_key_press(GtkWidget *widget, GdkEventKey *event, gpointer use
 	case GDK_KEY_F:
     	    open_frequency_entry();
     	    return TRUE;
+	case GDK_KEY_space:
+	    if (!event->is_modifier && !r->mox) { // Pornim doar dacă nu e deja în TX
+		r->mox = TRUE; // Forțăm TRUE pentru PTT
+	    	set_mox(r, r->mox);
+            	update_radio(r);  // Actualizăm butonul pe interfață
+	    }
+            return TRUE;      // Consumăm evenimentul
         default:
             return FALSE;
     }
@@ -523,6 +541,16 @@ gboolean start_cb(GtkWidget *widget,gpointer data) {
     gtk_container_remove(GTK_CONTAINER(grid),start);
     gtk_container_remove(GTK_CONTAINER(grid),retry);
     gtk_grid_attach(GTK_GRID(grid), radio->visual, 1, 0, 4, 1);
+    // 1. Spunem widget-ului ce tip de evenimente să asculte
+    gtk_widget_add_events(radio->visual, GDK_KEY_PRESS_MASK | GDK_KEY_RELEASE_MASK);
+    
+    // 2. Permitem widget-ului să poată fi "selectat" (focus)
+    gtk_widget_set_can_focus(radio->visual, TRUE);
+    
+    // 3. Conectăm funcțiile de taste
+    g_signal_connect(G_OBJECT(radio->visual), "key-press-event", G_CALLBACK(on_key_press), NULL);
+    g_signal_connect(G_OBJECT(radio->visual), "key-release-event", G_CALLBACK(on_key_release), NULL);
+    
     gtk_widget_show_all(grid);
 
     //launch_rigctl(radio);
@@ -581,6 +609,7 @@ static void activate_hpsdr(GtkApplication *app, gpointer data) {
 #endif
   main_window = gtk_application_window_new (app);
   g_signal_connect(G_OBJECT(main_window), "key-press-event", G_CALLBACK(on_key_press), NULL);
+  g_signal_connect(G_OBJECT(main_window), "key-release-event", G_CALLBACK(on_key_release), NULL);
   sprintf(title,"LinHPSDR (%s)",version);
   gtk_window_set_title (GTK_WINDOW (main_window), title);
   gtk_window_set_resizable(GTK_WINDOW(main_window), FALSE);
