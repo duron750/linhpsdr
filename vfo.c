@@ -68,8 +68,8 @@ const long long ll_step[13]= {
    1LL
 };
 
-gint64 steps[STEPS]={1,10,25,50,100,250,500,1000,5000,9000,10000,100000,250000,500000,1000000};
-char *step_labels[STEPS]={"1Hz","10Hz","25Hz","50Hz","100Hz","250Hz","500Hz","1kHz","5kHz","9kHz","10kHz","100kHz","250KHz","500KHz","1MHz"};
+gint64 steps[STEPS]={1,10,25,50,100,250,500,1000,5000,9000,10000,12500,100000,250000,500000,1000000};
+char *step_labels[STEPS]={"1 Hz","10 Hz","25 Hz","50 Hz","100 Hz","250 Hz","500 Hz","1 kHz","5 kHz","9 kHz","10 kHz","12.5 kHz", "100 kHz","250 kHz","500 kHz","1 MHz"};
    
 static gboolean pressed=FALSE;
 static gdouble last_x;
@@ -202,6 +202,42 @@ static void aswapb_cb(GtkButton *widget,gpointer user_data) {
   vfo_aswapb(rx);
 }
 
+static void EnableSplitSubRX(gpointer user_data) {
+  RECEIVER *rx=(RECEIVER *)user_data;
+  vfo_a2b(rx);
+  
+  // Split mode in CW, RX on VFO A, TX on VFO B.
+  // When mode turned on, default to VFO A +1 kHz
+  if (rx->mode_a == CWL || rx->mode_a == CWU) {
+    // Most pile-ups start with UP 1
+    rx->frequency_b = rx->frequency_a + 1000;
+  }
+  else if (rx->mode_a == LSB || rx->mode_a == USB) {
+    rx->frequency_b = rx->frequency_a + 5000;    
+  }
+  else {
+    return;
+  }
+  rx->mode_b=rx->mode_a;
+  if(!rx->subrx_enable) {
+    create_subrx(rx);
+    rx->subrx_enable=TRUE;
+  }
+}
+
+static void DisableSplitSubRX(gpointer user_data) {
+  RECEIVER *rx=(RECEIVER *)user_data;
+  if (rx->mode_a == CWL || rx->mode_a ==CWU ||
+      rx->mode_a == LSB || rx->mode_a == USB) {
+    if(rx->subrx_enable) {
+      rx->subrx_enable=FALSE;
+      destroy_subrx(rx);
+      rx->subrx=NULL;
+      printf("Destroy subrx subrx\n");
+    }
+  } 
+}
+
 static void split_b_cb(GtkToggleButton *widget,gpointer user_data) {
   RECEIVER *rx=(RECEIVER *)user_data;
   rx->split=rx->split==SPLIT_OFF?SPLIT_ON:SPLIT_OFF;
@@ -231,21 +267,16 @@ void split_cb(GtkWidget *menu_item,gpointer data) {
   g_signal_handlers_block_by_func(choice->button,G_CALLBACK(split_b_cb),rx);
   gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(choice->button),rx->split!=SPLIT_OFF);
   g_signal_handlers_unblock_by_func(choice->button,G_CALLBACK(split_b_cb),rx);
-  frequency_changed(rx);
+
   if(radio->transmitter && radio->transmitter->rx==rx) {
     switch(rx->split) {
       case SPLIT_OFF:
         transmitter_set_mode(radio->transmitter,rx->mode_a);
+        DisableSplitSubRX(rx);
         break;
       case SPLIT_ON:
-        // Split mode in CW, RX on VFO A, TX on VFO B.
-        // When mode turned on, default to VFO A +1 kHz
-        if (rx->mode_a == CWL || rx->mode_a ==CWU) {
-          // Most pile-ups start with UP 1
-          rx->frequency_b = rx->frequency_a + 1000;
-          rx->mode_b=rx->mode_a;
-        }
         transmitter_set_mode(radio->transmitter,rx->mode_b);
+        EnableSplitSubRX(rx);        
         break;
       case SPLIT_SAT:
       case SPLIT_RSAT:
@@ -253,15 +284,34 @@ void split_cb(GtkWidget *menu_item,gpointer data) {
         break;
     }
   }
+  frequency_changed(rx);  
+  update_vfo(rx);  
   g_free(choice);
 }
 
-static gboolean split_b_press_cb(GtkWidget *widget,GdkEvent *event,gpointer user_data) {
+static gboolean split_b_press_cb(GtkWidget *widget,GdkEvent *event, gpointer user_data) {
   RECEIVER *rx=(RECEIVER *)user_data;
   GtkWidget *menu=gtk_menu_new();
   GtkWidget *menu_item;
   CHOICE *choice;
+  
   switch(((GdkEventButton*)event)->button) {
+    case 1:  // LEFT
+      if(rx->split!=SPLIT_OFF) {
+        transmitter_set_mode(radio->transmitter,rx->mode_a);
+        DisableSplitSubRX(rx);
+        rx->split=SPLIT_OFF;
+      } else {
+        EnableSplitSubRX(rx); 
+        transmitter_set_mode(radio->transmitter,rx->mode_b);
+        rx->split=SPLIT_ON;
+      }  
+      frequency_changed(rx);  
+      update_vfo(rx);      
+        
+      return TRUE;
+      break; 
+      
     case 3:  // RIGHT
       menu=gtk_menu_new();
       menu_item=gtk_menu_item_new_with_label("Off");
@@ -298,6 +348,7 @@ static gboolean split_b_press_cb(GtkWidget *widget,GdkEvent *event,gpointer user
 #else
       gtk_menu_popup(GTK_MENU(menu),NULL,NULL,NULL,NULL,event->button,event->time);
 #endif
+      frequency_changed(rx); 
       return TRUE;
       break;
   }
@@ -430,6 +481,61 @@ static void subrx_b_cb(GtkToggleButton *widget,gpointer user_data) {
   }
   update_vfo(rx);
 }
+
+static void div_b_cb(GtkToggleButton *widget,gpointer user_data) {
+  RECEIVER *rx=(RECEIVER *)user_data;
+
+  g_print("Diversity rx %d\n", rx->diversity);
+  if(rx->diversity) {
+    //Delete receiver
+    int this_mixer = rx->dmix_id;
+    delete_diversity_mixer(radio->divmixer[this_mixer]);
+    rx->diversity = FALSE;
+  } else { 
+    g_print("Add new rx\n");
+    int new_hidden_rx = add_receiver(radio, FALSE);            
+    if (new_hidden_rx > 0) {
+      g_print("-----------Hidden RX added %d\n", new_hidden_rx);
+      int dmix_num = add_diversity_mixer(radio, rx, radio->receiver[new_hidden_rx]);
+      if (dmix_num > -1) {
+        g_print("Vis mix chan %d\n", rx->dmix_id);
+        g_print("Hid mix chan %d\n", radio->receiver[new_hidden_rx]->dmix_id); 
+        g_print("channel %d\n", radio->divmixer[dmix_num]->rx_hidden->channel);            
+        rx->diversity = TRUE;
+      }
+    } else {
+      g_print("Failed to add new rx\n");
+    }
+  }    
+  g_print("Diversity rx %d\n", rx->diversity);  
+}
+
+
+static void ps_press_cb(GtkToggleButton *widget,gpointer user_data) {
+  RECEIVER *rx=(RECEIVER *)user_data;
+#ifdef PURESIGNAL
+  if(radio->transmitter!=NULL && radio->transmitter->rx==rx) {
+    TRANSMITTER *tx=radio->transmitter;
+    int state = gtk_toggle_button_get_active(widget);
+ 
+    if (state) {
+      if (radio->receivers <= (radio->discovered->ps_tx_fdbk_chan - 1)) {
+        transmitter_set_ps(tx, 1);
+        g_print("PS ON\n");
+        tx->puresignal_enabled = TRUE;
+      }
+      else {
+        g_print("Close a receiver %i\n", radio->receivers);
+      }
+    } else {
+      transmitter_set_ps(tx, 0);
+      g_print("PS OFF\n");
+      tx->puresignal_enabled = FALSE;
+    }
+  }
+#endif
+}
+
 
 static void lock_b_cb(GtkToggleButton *widget,gpointer user_data) {
   RECEIVER *rx=(RECEIVER *)user_data;
@@ -677,7 +783,7 @@ static gboolean nr_b_pressed_cb(GtkWidget *widget,GdkEventButton *event,gpointer
 static void snb_b_cb(GtkToggleButton *widget,gpointer user_data) {
   RECEIVER *rx=(RECEIVER *)user_data;
   rx->snb=gtk_toggle_button_get_active(widget);
-  update_noise(rx);
+  update_noise(rx);  
 }
 
 static void anf_b_cb(GtkToggleButton *widget,gpointer user_data) {
@@ -696,6 +802,16 @@ static void bpsk_b_cb(GtkToggleButton *widget,gpointer user_data) {
     destroy_bpsk(rx->bpsk);
     rx->bpsk=NULL;
     rx->bpsk_enable=FALSE;
+  }
+}
+
+static void ant_b_cb(GtkToggleButton *widget,gpointer user_data) {
+
+  if (radio->adc[0].antenna == 0) {
+    radio->adc[0].antenna = 3;
+  }
+  else {
+    radio->adc[0].antenna = 0;    
   }
 }
 
@@ -784,7 +900,6 @@ static gboolean rit_b_press_event_cb(GtkWidget *widget,GdkEventButton *event,gpo
   }
   return FALSE;
 }
-
 
 static gboolean rit_b_press_cb(GtkWidget *widget,GdkEvent *event,gpointer user_data) {
   RECEIVER *rx=(RECEIVER *)user_data;
@@ -1147,7 +1262,6 @@ static gboolean agcgain_release_cb(GtkWidget *widget,GdkEventButton *event,gpoin
   return TRUE;
 }
 
-
 static gboolean agcgain_scale_scroll_event_cb(GtkWidget *widget,GdkEventScroll *event,gpointer data) {
   RECEIVER *rx=(RECEIVER *)data;
   VFO_DATA *v=(VFO_DATA *)g_object_get_data((GObject *)rx->vfo,"vfo_data");
@@ -1165,6 +1279,70 @@ static gboolean agcgain_scale_scroll_event_cb(GtkWidget *widget,GdkEventScroll *
   return TRUE;
 }
 
+//********************************************************************************** 
+//********************************************************************************** 
+static gboolean squelch_press_cb(GtkWidget *widget,GdkEventButton *event,gpointer data) {
+  RECEIVER *rx=(RECEIVER *)data;
+  pressed=TRUE;
+  last_x=event->x;
+  has_moved=FALSE;
+  return TRUE;
+}
+
+static gboolean squelch_scale_motion_notify_event_cb(GtkWidget *widget, GdkEventMotion *event, gpointer data) {
+  RECEIVER *rx=(RECEIVER *)data;
+  if(pressed) {
+    has_moved=TRUE;
+    gdouble moved=event->x-last_x;
+    rx->squelch = rx->squelch + (moved/100.0);
+    if(rx->squelch > 1.0) rx->squelch= 1.0;
+    if(rx->squelch < 0) rx->squelch = 0;
+    set_squelch(rx);
+    last_x=event->x;
+    update_vfo(rx);
+  }
+  return TRUE;
+}
+
+static gboolean squelch_release_cb(GtkWidget *widget,GdkEventButton *event,gpointer data) {
+  RECEIVER *rx=(RECEIVER *)data;
+  if(has_moved) {
+    gdouble moved=event->x-last_x;
+    rx->squelch = rx->squelch + (moved/100);
+    if(rx->squelch>1.0) rx->squelch = 1.0;
+    if(rx->squelch<0.0) rx->squelch = 0.0;
+    set_squelch(rx);
+  } else {
+    rx->squelch = event->x/100;
+    if(rx->squelch>1.0) rx->squelch = 1.0;
+    if(rx->squelch<0.0) rx->squelch = 0.0;
+    set_squelch(rx);
+  }
+  pressed=FALSE;
+  has_moved=FALSE;
+  update_vfo(rx);
+  return TRUE;
+}
+
+static gboolean squelch_scale_scroll_event_cb(GtkWidget *widget,GdkEventScroll *event,gpointer data) {
+  RECEIVER *rx=(RECEIVER *)data;
+  VFO_DATA *v=(VFO_DATA *)g_object_get_data((GObject *)rx->vfo,"vfo_data");
+  if(event->direction==GDK_SCROLL_DOWN) {
+    if(rx->squelch>0.0) {
+      rx->squelch=rx->squelch-0.01;
+    }
+  } else if(event->direction==GDK_SCROLL_UP) {
+    if(rx->squelch<1.0) {
+      rx->squelch = rx->squelch+0.01;
+    }
+  }
+  gtk_level_bar_set_value(GTK_LEVEL_BAR(v->squelch_scale),rx->squelch);
+  set_squelch(rx);
+  return TRUE;
+}
+
+//********************************************************************************** 
+//********************************************************************************** 
 void band_cb(GtkWidget *menu_item,gpointer data) {
   CHOICE *choice=(CHOICE *)data;
   set_band(choice->rx,choice->selection,choice->sub_selection);
@@ -1243,7 +1421,7 @@ static gboolean frequency_a_scroll_event_cb(GtkWidget *widget,GdkEventScroll *ev
     if(event->direction==GDK_SCROLL_UP && !rx->ctun) {
       step=-step;
     }                    
-g_print("%s: digit=%d step=%lld\n",__FUNCTION__,digit,step);
+//g_print("%s: digit=%d step=%lld\n",__FUNCTION__,digit,step);
     receiver_move(rx,step,FALSE);
   }
   update_vfo(rx);
@@ -1331,8 +1509,8 @@ GtkWidget *create_vfo(RECEIVER *rx) {
 
   g_print("%s: rx=%d\n",__FUNCTION__,rx->channel);
 
-  int x=0;
-  int y=0;
+  int x=5;
+  int y=5;
 
   VFO_DATA *v=g_new(VFO_DATA,1);
 
@@ -1411,8 +1589,9 @@ GtkWidget *create_vfo(RECEIVER *rx) {
   gtk_widget_set_size_request(v->step_b,70,15);
   g_signal_connect(v->step_b, "pressed",G_CALLBACK(step_b_cb),rx);
   gtk_layout_put(GTK_LAYOUT(v->vfo),v->step_b,x,y);
-  x+=100;
+  
 
+  x = 630;
   v->tx_label=gtk_label_new("");
   gtk_widget_set_name(v->tx_label,"warning-label");
   gtk_widget_set_size_request(v->tx_label,60,15);
@@ -1422,11 +1601,23 @@ GtkWidget *create_vfo(RECEIVER *rx) {
       gtk_label_set_text(GTK_LABEL(v->tx_label),"ASSIGNED TX");
     }
   }
-  
+#ifdef PURESIGNAL 
+  x+=93;
+
+  v->ps_b=gtk_toggle_button_new_with_label("PS");
+  gtk_widget_set_name(v->ps_b,"vfo-toggle");
+  gtk_toggle_button_set_mode(GTK_TOGGLE_BUTTON(v->ps_b),FALSE);
+  if(radio!=NULL && radio->transmitter!=NULL) {
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(v->ps_b), radio->transmitter->puresignal_enabled);
+  }
+  gtk_widget_set_size_request(v->ps_b,33,6);
+  g_signal_connect(v->ps_b, "toggled", G_CALLBACK(ps_press_cb), rx);
+  gtk_layout_put(GTK_LAYOUT(v->vfo),v->ps_b,x,y);
+#endif
   /* ... */
 
   x=0;
-  y=16;
+  y=21;
 
   long long af=rx->frequency_a;
   if(rx->ctun) af=rx->ctun_frequency;
@@ -1447,7 +1638,7 @@ GtkWidget *create_vfo(RECEIVER *rx) {
   g_signal_connect(event_box_a,"scroll_event",G_CALLBACK(frequency_a_scroll_event_cb),(gpointer)rx);
 
   x+=240;
-  y=20;
+  y=27;
 
   long long bf=rx->frequency_b;
   sprintf(temp,"%5lld.%03lld.%03lld",bf/(long long)1000000,(bf%(long long)1000000)/(long long)1000,bf%(long long)1000);
@@ -1464,7 +1655,7 @@ GtkWidget *create_vfo(RECEIVER *rx) {
   gtk_widget_set_events(event_box_b, GDK_SCROLL_MASK | GDK_POINTER_MOTION_MASK | GDK_POINTER_MOTION_HINT_MASK);
 
   x+=180;
-  y=23;
+  y=31;
 
   v->subrx_b=gtk_toggle_button_new_with_label("SUBRX");
   gtk_widget_set_name(v->subrx_b,"vfo-toggle");
@@ -1475,9 +1666,9 @@ GtkWidget *create_vfo(RECEIVER *rx) {
   gtk_layout_put(GTK_LAYOUT(v->vfo),v->subrx_b,x,y);
 
   x=x+60;
-  y=17;
+  y=21;
 
-  GtkWidget *afgain_label=gtk_label_new("AF Gain:");
+  GtkWidget *afgain_label=gtk_label_new("AF GAIN");
   gtk_widget_set_name(afgain_label,"afgain-text");
   gtk_layout_put(GTK_LAYOUT(v->vfo),afgain_label,x,y);
   x+=60;
@@ -1501,15 +1692,43 @@ GtkWidget *create_vfo(RECEIVER *rx) {
   g_signal_connect(event_box_afgain,"button_release_event",G_CALLBACK(afgain_release_cb),rx);
   gtk_widget_set_events(event_box_afgain, GDK_BUTTON_PRESS_MASK | GDK_BUTTON_RELEASE_MASK | GDK_SCROLL_MASK | GDK_POINTER_MOTION_MASK | GDK_POINTER_MOTION_HINT_MASK);
 
-  x=480;
-  y=31;
 
-  GtkWidget *agcgain_label=gtk_label_new("AGC Gain:");
+  x=x+105;
+  y=21;
+  
+  v->squelch_label=gtk_label_new("SQL");
+  gtk_widget_set_name(v->squelch_label,"squelch-text");
+  gtk_layout_put(GTK_LAYOUT(v->vfo),v->squelch_label,x,y);
+  
+  x+=22;
+  y=18;
+
+  v->squelch_scale=gtk_level_bar_new();
+  gtk_level_bar_remove_offset_value(GTK_LEVEL_BAR(v->squelch_scale),GTK_LEVEL_BAR_OFFSET_LOW);
+  gtk_level_bar_remove_offset_value(GTK_LEVEL_BAR(v->squelch_scale),GTK_LEVEL_BAR_OFFSET_HIGH);
+  gtk_level_bar_remove_offset_value(GTK_LEVEL_BAR(v->squelch_scale),GTK_LEVEL_BAR_OFFSET_FULL);
+  gtk_widget_set_name(v->squelch_scale,"squelch-scale");
+  gtk_widget_set_size_request(v->squelch_scale,100,15);
+  gtk_level_bar_set_value(GTK_LEVEL_BAR(v->squelch_scale),rx->squelch);
+
+  GtkWidget *event_box_squelch = gtk_event_box_new();
+  gtk_container_add(GTK_CONTAINER(event_box_squelch),v->squelch_scale);
+  gtk_layout_put(GTK_LAYOUT(v->vfo),event_box_squelch,x,y);
+  g_signal_connect(event_box_squelch,"motion-notify-event",G_CALLBACK(squelch_scale_motion_notify_event_cb),rx);
+  g_signal_connect(event_box_squelch,"scroll_event",G_CALLBACK(squelch_scale_scroll_event_cb),(gpointer)rx);
+  g_signal_connect(event_box_squelch,"button_press_event",G_CALLBACK(squelch_press_cb),rx);
+  g_signal_connect(event_box_squelch,"button_release_event",G_CALLBACK(squelch_release_cb),rx);
+  gtk_widget_set_events(event_box_squelch, GDK_BUTTON_PRESS_MASK | GDK_BUTTON_RELEASE_MASK | GDK_SCROLL_MASK | GDK_POINTER_MOTION_MASK | GDK_POINTER_MOTION_HINT_MASK);
+
+  x=480;
+  y=36;
+
+  GtkWidget *agcgain_label=gtk_label_new("AGC GAIN");
   gtk_widget_set_name(agcgain_label,"agcgain-text");
   gtk_layout_put(GTK_LAYOUT(v->vfo),agcgain_label,x,y);
 
   x+=60;
-  y=32;
+  y=36;
 
   v->agcgain_scale=gtk_level_bar_new_for_interval(0.0,140.0);
   gtk_level_bar_remove_offset_value(GTK_LEVEL_BAR(v->agcgain_scale),GTK_LEVEL_BAR_OFFSET_LOW);
@@ -1529,17 +1748,17 @@ GtkWidget *create_vfo(RECEIVER *rx) {
   gtk_widget_set_events(event_box_agcgain, GDK_BUTTON_PRESS_MASK | GDK_BUTTON_RELEASE_MASK | GDK_SCROLL_MASK | GDK_POINTER_MOTION_MASK | GDK_POINTER_MOTION_HINT_MASK);
 
 
-  y=47;
-  x=0;
+  y=52;
+  x=5;
 
-  v->lock_b=gtk_toggle_button_new_with_label("Lock");
+  v->lock_b=gtk_toggle_button_new_with_label("LOCK");
   gtk_widget_set_name(v->lock_b,"vfo-toggle");
   gtk_toggle_button_set_mode(GTK_TOGGLE_BUTTON(v->lock_b),FALSE);
   gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(v->lock_b),FALSE);
   gtk_widget_set_size_request(v->lock_b,35,6);
   g_signal_connect(v->lock_b, "toggled", G_CALLBACK(lock_b_cb),rx);
   gtk_layout_put(GTK_LAYOUT(v->vfo),v->lock_b,x,y);
-  x=x+40;
+  x=x+43;
 
   v->mode_b=gtk_button_new_with_label(mode_string[rx->mode_a]);
   gtk_widget_set_name(v->mode_b,"vfo-mode-filter-button");
@@ -1649,7 +1868,7 @@ GtkWidget *create_vfo(RECEIVER *rx) {
 
   GtkWidget *event_box_rit_b=gtk_event_box_new();
   gtk_container_add(GTK_CONTAINER(event_box_rit_b),v->rit_value);
-  gtk_layout_put(GTK_LAYOUT(v->vfo),event_box_rit_b,x,y);
+  gtk_layout_put(GTK_LAYOUT(v->vfo),event_box_rit_b,x,y-1);
   g_signal_connect(event_box_rit_b,"scroll_event",G_CALLBACK(rit_b_scroll_event_cb),(gpointer)rx);
   gtk_widget_set_events(event_box_rit_b, GDK_SCROLL_MASK);
 
@@ -1667,7 +1886,8 @@ GtkWidget *create_vfo(RECEIVER *rx) {
   gtk_layout_put(GTK_LAYOUT(v->vfo),v->xit_b,x,y);
   x=x+40;
 
-  if(radio->transmitter!=NULL && radio->transmitter->rx==rx) {
+
+  if(radio->transmitter!=NULL) {
     sprintf(temp,"%+05ld",radio->transmitter->xit); 
   } else {
     sprintf(temp,"%+05ld",0L); 
@@ -1677,7 +1897,7 @@ GtkWidget *create_vfo(RECEIVER *rx) {
 
   GtkWidget *event_box_xit_b=gtk_event_box_new();
   gtk_container_add(GTK_CONTAINER(event_box_xit_b),v->xit_value);
-  gtk_layout_put(GTK_LAYOUT(v->vfo),event_box_xit_b,x,y);
+  gtk_layout_put(GTK_LAYOUT(v->vfo),event_box_xit_b,x,y-1);
   g_signal_connect(event_box_xit_b,"scroll_event",G_CALLBACK(xit_b_scroll_event_cb),(gpointer)rx);
   gtk_widget_set_events(event_box_xit_b, GDK_SCROLL_MASK);
 
@@ -1690,7 +1910,8 @@ GtkWidget *create_vfo(RECEIVER *rx) {
   gtk_widget_set_size_request(v->ctun_b,35,6);
   g_signal_connect(v->ctun_b, "toggled", G_CALLBACK(ctun_b_cb),rx);
   gtk_layout_put(GTK_LAYOUT(v->vfo),v->ctun_b,x,y);
-  x=x+40;
+  x=x+45;
+
 
   v->dup_b=gtk_toggle_button_new_with_label("DUP");
   gtk_widget_set_name(v->dup_b,"vfo-toggle");
@@ -1701,14 +1922,26 @@ GtkWidget *create_vfo(RECEIVER *rx) {
   gtk_layout_put(GTK_LAYOUT(v->vfo),v->dup_b,x,y);
   x=x+40;
 
-  v->bpsk_b=gtk_toggle_button_new_with_label("BPSK");
-  gtk_widget_set_name(v->bpsk_b,"vfo-toggle");
-  gtk_toggle_button_set_mode(GTK_TOGGLE_BUTTON(v->bpsk_b),FALSE);
-  gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(v->bpsk_b),rx->bpsk_enable);
-  gtk_widget_set_size_request(v->bpsk_b,35,6);
-  g_signal_connect(v->bpsk_b, "toggled", G_CALLBACK(bpsk_b_cb),rx);
-  gtk_layout_put(GTK_LAYOUT(v->vfo),v->bpsk_b,x,y);
-  x=x+40;
+  
+  if(radio->discovered->device==DEVICE_HERMES_LITE2) {
+    v->ant_b=gtk_toggle_button_new_with_label("RXANT");
+    gtk_widget_set_name(v->ant_b,"vfo-toggle");
+    gtk_toggle_button_set_mode(GTK_TOGGLE_BUTTON(v->ant_b),FALSE);
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(v->ant_b),radio->adc[0].antenna!=0);
+    gtk_widget_set_size_request(v->ant_b,35,6);
+    g_signal_connect(v->ant_b, "toggled", G_CALLBACK(ant_b_cb),rx);
+    gtk_layout_put(GTK_LAYOUT(v->vfo),v->ant_b,x,y);    
+  }
+  else {
+    v->bpsk_b=gtk_toggle_button_new_with_label("BPSK");
+    gtk_widget_set_name(v->bpsk_b,"vfo-toggle");
+    gtk_toggle_button_set_mode(GTK_TOGGLE_BUTTON(v->bpsk_b),FALSE);
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(v->bpsk_b),rx->bpsk_enable);
+    gtk_widget_set_size_request(v->bpsk_b,35,6);
+    g_signal_connect(v->bpsk_b, "toggled", G_CALLBACK(bpsk_b_cb),rx);
+    gtk_layout_put(GTK_LAYOUT(v->vfo),v->bpsk_b,x,y);
+  }
+  x=x+52;
 
   v->bmk_b=gtk_button_new_with_label("BMK");
   gtk_widget_set_name(v->bmk_b,"vfo-button");
@@ -1716,7 +1949,18 @@ GtkWidget *create_vfo(RECEIVER *rx) {
   g_signal_connect(v->bmk_b, "button-press-event", G_CALLBACK(bmk_b_pressed_cb),rx);
   gtk_layout_put(GTK_LAYOUT(v->vfo),v->bmk_b,x,y);
   x=x+40;
-
+  
+  if(radio->discovered->protocol == PROTOCOL_1) {  
+    v->div_b=gtk_toggle_button_new_with_label("DIV");
+    gtk_widget_set_name(v->div_b,"vfo-toggle");
+    gtk_toggle_button_set_mode(GTK_TOGGLE_BUTTON(v->div_b),FALSE);
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(v->div_b),rx->diversity);
+    gtk_widget_set_size_request(v->div_b,35,6);
+    g_signal_connect(v->div_b, "toggled", G_CALLBACK(div_b_cb),rx);
+    gtk_layout_put(GTK_LAYOUT(v->vfo),v->div_b,x,y);
+    x=x+40;
+  }
+  
   gtk_widget_show_all(v->vfo);
 
   g_object_set_data ((GObject *)v->vfo,"vfo_data",v);
@@ -1769,9 +2013,23 @@ void update_vfo(RECEIVER *rx) {
 
     if(tx->rx==rx) {
       gtk_label_set_text(GTK_LABEL(v->tx_label),"ASSIGNED TX");
+#ifdef PURESIGNAL
+      gtk_widget_set_sensitive(v->ps_b, TRUE);
+      gtk_widget_show(v->ps_b);
+#endif
     } else {
       gtk_label_set_text(GTK_LABEL(v->tx_label),"");
+#ifdef PURESIGNAL
+      gtk_widget_set_sensitive(v->ps_b, FALSE);
+      gtk_widget_hide(v->ps_b);
+#endif
     }
+
+#ifdef PURESIGNAL
+    g_signal_handlers_block_by_func(v->ps_b, G_CALLBACK(ps_press_cb), rx);
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(v->ps_b), radio->transmitter->puresignal_enabled);
+    g_signal_handlers_unblock_by_func(v->ps_b,G_CALLBACK(ps_press_cb), rx);
+#endif
 
     g_signal_handlers_block_by_func(v->xit_b,G_CALLBACK(xit_b_cb),rx);
     gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(v->xit_b),tx->xit_enabled);
@@ -1784,6 +2042,16 @@ void update_vfo(RECEIVER *rx) {
   // update AGC Gain scale
   gtk_level_bar_set_value(GTK_LEVEL_BAR(v->agcgain_scale),rx->agc_gain+20.0);
 
+  // update FM squelch
+  if(rx->mode_a==FMN) {
+    gtk_level_bar_set_value(GTK_LEVEL_BAR(v->squelch_scale),rx->squelch);
+    gtk_label_set_text(GTK_LABEL(v->squelch_label),"SQL");
+    gtk_widget_show(v->squelch_scale);
+  }
+  else {
+      gtk_label_set_text(GTK_LABEL(v->squelch_label),"");
+      gtk_widget_hide(v->squelch_scale);
+  }
   // update Lock button
   gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(v->lock_b),rx->locked);
 
@@ -1882,10 +2150,16 @@ void update_vfo(RECEIVER *rx) {
   gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(v->dup_b),rx->duplex);
   g_signal_handlers_unblock_by_func(v->dup_b,G_CALLBACK(dup_b_cb),rx);
 
+  // update RXANT button
+  if(radio->discovered->device==DEVICE_HERMES_LITE2) {  
+    g_signal_handlers_block_by_func(v->ant_b,G_CALLBACK(ant_b_cb),rx);
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(v->ant_b),radio->adc[0].antenna!=0);
+    g_signal_handlers_unblock_by_func(v->ant_b,G_CALLBACK(ant_b_cb),rx);
+  }
   // update BPSK button
-  g_signal_handlers_block_by_func(v->bpsk_b,G_CALLBACK(bpsk_b_cb),rx);
-  gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(v->bpsk_b),rx->bpsk_enable);
-  g_signal_handlers_unblock_by_func(v->bpsk_b,G_CALLBACK(bpsk_b_cb),rx);
+  //g_signal_handlers_block_by_func(v->bpsk_b,G_CALLBACK(bpsk_b_cb),rx);
+  //gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(v->bpsk_b),rx->bpsk_enable);
+  //g_signal_handlers_unblock_by_func(v->bpsk_b,G_CALLBACK(bpsk_b_cb),rx);
  
   // update ZOOM button
   sprintf(temp,"ZOOM x%d",rx->zoom);
@@ -1916,53 +2190,12 @@ void update_vfo(RECEIVER *rx) {
   g_signal_handlers_block_by_func(v->subrx_b,G_CALLBACK(subrx_b_cb),rx);
   gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(v->subrx_b),rx->subrx!=NULL);
   g_signal_handlers_unblock_by_func(v->subrx_b,G_CALLBACK(subrx_b_cb),rx);
-
-}
-
-
-// now only used by meter.c
-
-void SetColour(cairo_t *cr, const int colour) {
-  switch(colour) {
-    case BACKGROUND:
-      cairo_set_source_rgb(cr, 0.10, 0.10, 0.10);
-      break;
-    case OFF_WHITE:
-      cairo_set_source_rgb(cr, 0.90, 0.90, 0.90);
-      break;
-    case BOX_ON:
-      cairo_set_source_rgb(cr, 0.00, 0.50, 0.00);
-      break;
-    case BOX_OFF:
-      cairo_set_source_rgb(cr, 0.20, 0.20, 0.20);
-      break;
-    case TEXT_A:
-      cairo_set_source_rgb(cr, 0.92, 0.61, 0.50);
-      break;
-    case TEXT_B:
-      cairo_set_source_rgb(cr, 0.64, 0.80, 0.82);
-      break;
-    case TEXT_C:
-      cairo_set_source_rgb(cr, 0.90, 0.90, 0.90);
-      break;
-    case WARNING:
-      cairo_set_source_rgb(cr, 0.85, 0.27, 0.27);
-      break;
-    case DARK_LINES:
-      cairo_set_source_rgb(cr, 0.30, 0.30, 0.30);
-      break;
-    case DARK_TEXT:
-      cairo_set_source_rgb(cr, 0.70, 0.70, 0.70);
-      break;
-    case INFO_ON:
-      cairo_set_source_rgb(cr, 0.15, 0.58, 0.60);
-      break;
-    case INFO_OFF:
-      cairo_set_source_rgb(cr, 0.20, 0.20, 0.20);
-      break;
-    default:
-      // Fallback: black
-      cairo_set_source_rgb(cr, 0.00, 0.00, 0.00);
-      break;
+  
+  // Diversity mixer
+  if(radio->discovered->protocol == PROTOCOL_1) {
+    g_signal_handlers_block_by_func(v->div_b, G_CALLBACK(div_b_cb), rx);
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(v->div_b), rx->diversity);
+    g_signal_handlers_unblock_by_func(v->div_b, G_CALLBACK(div_b_cb), rx);  
   }
 }
+

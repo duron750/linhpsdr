@@ -197,7 +197,7 @@ BANDSTACK bandstack2200={2,0,bandstack_entries2200};
 BANDSTACK bandstack630={2,0,bandstack_entries630};
 BANDSTACK bandstack160={3,1,bandstack_entries160};
 BANDSTACK bandstack80={3,1,bandstack_entries80};
-BANDSTACK bandstack60={5,1,bandstack_entries60_OTHER};
+BANDSTACK bandstack60={11,1,bandstack_entries60_UK};
 BANDSTACK bandstack40={3,1,bandstack_entries40};
 BANDSTACK bandstack30={3,1,bandstack_entries30};
 BANDSTACK bandstack20={4,1,bandstack_entries20};
@@ -269,12 +269,12 @@ BANDSTACK bandstack_xvtr_7={3,0,bandstack_entries_xvtr_7};
 
 
 
-BAND bands[BANDS+XVTRS] = 
+BAND bands[BANDS+XVTRS] =
     {{"2200",&bandstack2200,0,0,0,0,0,ALEX_ATTENUATION_0dB,53.0,135700LL,137800LL,0LL,0LL,0,-140,-60,20,-145,-65,1},
      {"630",&bandstack630,0,0,0,0,0,ALEX_ATTENUATION_0dB,53.0,472000LL,479000LL,0LL,0LL,0,-140,-60,20,-145,-65,1},
-     {"160",&bandstack160,0,0,0,0,0,ALEX_ATTENUATION_0dB,53.0,1800000LL,2000000LL,0LL,0LL,0,-140,-60,20,-145,-65,1},
+     {"160",&bandstack160,0,0,0,0,0,ALEX_ATTENUATION_0dB,53.0,1810000LL,2000000LL,0LL,0LL,0,-140,-60,20,-145,-65,1},
      {"80",&bandstack80,0,0,0,0,0,ALEX_ATTENUATION_0dB,53.0,3500000LL,4000000LL,0LL,0LL,0,-140,-60,20,-145,-65,1},
-     {"60",&bandstack60,0,0,0,0,0,ALEX_ATTENUATION_0dB,53.0,5330500LL,5403500LL,0LL,0LL,0,-140,-60,20,-145,-65,1},
+     {"60",&bandstack60,0,0,0,0,0,ALEX_ATTENUATION_0dB,53.0,5258500LL,5403500LL,0LL,0LL,0,-140,-60,20,-145,-65,1},
      {"40",&bandstack40,0,0,0,0,0,ALEX_ATTENUATION_0dB,53.0,7000000LL,7300000LL,0LL,0LL,0,-140,-60,20,-145,-65,1},
      {"30",&bandstack30,0,0,0,0,0,ALEX_ATTENUATION_0dB,53.0,10100000LL,10150000LL,0LL,0LL,0,-140,-60,20,-145,-65,1},
      {"20",&bandstack20,0,0,0,0,0,ALEX_ATTENUATION_0dB,53.0,14000000LL,14350000LL,0LL,0LL,0,-140,-60,20,-145,-65,1},
@@ -283,6 +283,8 @@ BAND bands[BANDS+XVTRS] =
      {"12",&bandstack12,0,0,0,0,0,ALEX_ATTENUATION_0dB,53.0,24890000LL,24990000LL,0LL,0LL,0,-140,-60,20,-145,-65,1},
      {"10",&bandstack10,0,0,0,0,0,ALEX_ATTENUATION_0dB,53.0,28000000LL,29700000LL,0LL,0LL,0,-140,-60,20,-145,-65,1},
      {"6",&bandstack6,0,0,0,0,0,ALEX_ATTENUATION_0dB,53.0,50000000LL,54000000LL,0LL,0LL,0,-140,-60,20,-145,-65,1},
+     {"GEN",&bandstackGEN,0,0,0,0,0,ALEX_ATTENUATION_0dB,53.0,0LL,0LL,0LL,0LL,1,-140,-60,20,-145,-65,1},
+     {"WWV",&bandstackWWV,0,0,0,0,0,ALEX_ATTENUATION_0dB,53.0,0LL,0LL,0LL,0LL,1,-140,-60,20,-145,-65,1},     
 #ifdef SOAPYSDR
      {"70",&bandstack70,0,0,0,0,0,ALEX_ATTENUATION_0dB,53.0,0LL,0LL,0,-140,-60,20,-145,-65,1},
      {"144",&bandstack144,0,0,0,0,0,ALEX_ATTENUATION_0dB,53.0,144000000LL,148000000LL,0LL,0LL,0,-140,-60,20,-145,-65,1},
@@ -292,10 +294,8 @@ BAND bands[BANDS+XVTRS] =
      {"1240",&bandstack1240,0,0,0,0,0,ALEX_ATTENUATION_0dB,53.0,1240000000LL,1300000000LL,0LL,0LL,0,-140,-60,20,-145,-65,1},
      {"2300",&bandstack2300,0,0,0,0,0,ALEX_ATTENUATION_0dB,53.0,2300000000LL,2450000000LL,0LL,0LL,0,-140,-60,20,-145,-65,1},
      {"3400",&bandstack3400,0,0,0,0,0,ALEX_ATTENUATION_0dB,53.0,3400000000LL,3410000000LL,0LL,0LL,0,-140,-60,20,-145,-65,1},
-     {"AIR",&bandstackAIR,0,0,0,0,0,ALEX_ATTENUATION_0dB,53.0,10800000LL,137000000LL,0LL,0LL,0,-140,-60,20,-145,-65,1},
+     {"AIR",&bandstackAIR,0,0,0,0,0,ALEX_ATTENUATION_0dB,53.0,108000000LL,137000000LL,0LL,0LL,0,-140,-60,20,-145,-65,1},
 #endif
-     {"GEN",&bandstackGEN,0,0,0,0,0,ALEX_ATTENUATION_0dB,53.0,0LL,0LL,0LL,0LL,0,-140,-60,20,-145,-65,1},
-     {"WWV",&bandstackWWV,0,0,0,0,0,ALEX_ATTENUATION_0dB,53.0,0LL,0LL,0LL,0LL,0,-140,-60,20,-145,-65,1},
 // XVTRS
      {"",&bandstack_xvtr_0,0,0,0,0,0,ALEX_ATTENUATION_0dB,53.0,0LL,0LL,0LL,0LL,0,-140,-60,20,-145,-65,1},
      {"",&bandstack_xvtr_1,0,0,0,0,0,ALEX_ATTENUATION_0dB,53.0,0LL,0LL,0LL,0LL,0,-140,-60,20,-145,-65,1},
@@ -454,6 +454,19 @@ void bandSaveState() {
         sprintf(name,"band.%d.disablePA",b);
         setProperty(name,value);
 
+        sprintf(value,"%d",bands[b].waterfall_low);
+        sprintf(name,"band.%d.waterfall_low",b);
+        setProperty(name,value);
+        
+        sprintf(value,"%d",bands[b].waterfall_high);
+        sprintf(name,"band.%d.waterfall_high",b);
+        setProperty(name,value);    
+        
+        sprintf(value,"%d",bands[b].waterfall_automatic);
+        sprintf(name,"band.%d.waterfall_automatic",b);
+        setProperty(name,value);         
+            
+
         for(stack=0;stack<bands[b].bandstack->entries;stack++) {
             entry=bands[b].bandstack->entry;
             entry+=stack;
@@ -494,10 +507,67 @@ void bandSaveState() {
     setProperty("band",value);
 }
 
+void change_filters(void) {
+  if(radio->filter_board == N2ADR) {  
+    BAND *band;
+    band = band_get_band(band160);
+    band->OCrx = band->OCtx = 1;
+    band = band_get_band(band80);
+    band->OCrx = band->OCtx = 66;
+    band = band_get_band(band60);
+    band->OCrx = band->OCtx = 68;
+    band = band_get_band(band40);
+    band->OCrx=band->OCtx = 68;
+    band = band_get_band(band30);
+    band->OCrx=band->OCtx = 72;
+    band = band_get_band(band20);
+    band->OCrx=band->OCtx = 72;
+    band = band_get_band(band17);
+    band->OCrx = band->OCtx = 80;
+    band = band_get_band(band15);
+    band->OCrx = band->OCtx = 80;
+    band = band_get_band(band12);
+    band->OCrx=band->OCtx = 96;
+    band = band_get_band(band10);
+    band->OCrx = band->OCtx = 96;  
+  }
+  else if (radio->filter_board == HL2_MRF101) {
+    BAND *band;
+    band = band_get_band(band160);
+    band->OCrx = band->OCtx = 0;
+    band = band_get_band(band80);
+    band->OCrx = band->OCtx = 80;
+    band = band_get_band(band60);
+    band->OCrx = band->OCtx = 72;
+    band = band_get_band(band40);
+    band->OCrx=band->OCtx = 68;
+    band = band_get_band(band30);
+    band->OCrx=band->OCtx = 68;
+    band = band_get_band(band20);
+    band->OCrx=band->OCtx = 66;
+    band = band_get_band(band17);
+    band->OCrx = band->OCtx = 66;
+    band = band_get_band(band15);
+    band->OCrx = band->OCtx = 65;
+    band = band_get_band(band12);
+    band->OCrx=band->OCtx = 65;
+    band = band_get_band(band10);
+    band->OCrx = band->OCtx = 65;       
+  }
+  else if (radio->filter_board == NONE) {
+    for(int i = 0; i < BANDS; i++) {
+      BAND *band = band_get_band(i);  
+      band->OCrx = band->OCtx = 0;
+    }
+  }
+}
+
 void bandRestoreState() {
     char* value;
     int b;
+    int stack;
     char name[128];
+    BANDSTACK_ENTRY* entry;
 
     for(b=0;b<BANDS+XVTRS;b++) {
         sprintf(name,"band.%d.title",b);
@@ -567,8 +637,54 @@ void bandRestoreState() {
         sprintf(name,"band.%d.disablePA",b);
         value=getProperty(name);
         if(value) bands[b].disablePA=atoi(value);
-    }
+        
+        sprintf(name,"band.%d.waterfall_low",b);
+        value=getProperty(name);
+        if(value) bands[b].waterfall_low=atoi(value);
+                
+        sprintf(name,"band.%d.waterfall_high",b);
+        value=getProperty(name);
+        if(value) bands[b].waterfall_high=atoi(value);   
+        
+        sprintf(name,"band.%d.waterfall_automatic",b);
+        value=getProperty(name);
+        if(value) bands[b].waterfall_automatic=atoi(value);          
+        
+        for(stack=0;stack<bands[b].bandstack->entries;stack++) {
+          entry=bands[b].bandstack->entry;
+          entry+=stack;
 
+          sprintf(name,"band.%d.stack.%d.a",b,stack);
+          value=getProperty(name);
+          if(value) entry->frequency=atoll(value);
+
+          sprintf(name,"band.%d.stack.%d.mode",b,stack);
+          value=getProperty(name);
+          if(value) entry->mode=atoi(value);
+
+          sprintf(name,"band.%d.stack.%d.filter",b,stack);
+          value=getProperty(name);
+          if(value) entry->filter=atoi(value);
+
+          sprintf(name,"band.%d.stack.%d.var1Low",b,stack);
+          value=getProperty(name);
+          if(value) entry->var1Low=atoi(value);
+
+          sprintf(name,"band.%d.stack.%d.var1High",b,stack);
+          value=getProperty(name);
+          if(value) entry->var1High=atoi(value);
+
+          sprintf(name,"band.%d.stack.%d.var2Low",b,stack);
+          value=getProperty(name);
+          if(value) entry->var2Low=atoi(value);
+
+          sprintf(name,"band.%d.stack.%d.var2High",b,stack);
+          value=getProperty(name);
+          if(value) entry->var2High=atoi(value);
+
+        }
+        
+    }
     value=getProperty("band");
     if(value) band=atoi(value);
 }
@@ -578,8 +694,10 @@ int get_band_from_frequency(gint64 f) {
   int found=-1;
 
   for(b=0;b<BANDS+XVTRS;b++) {
+    if ((b == band6) && (radio->hl2 != NULL)) continue;
     BAND *band=band_get_band(b);
     if(strlen(band->title)>0) {
+
       if(f>=band->frequencyMin && f<=band->frequencyMax) {
         found=b;
         break;
@@ -587,7 +705,7 @@ int get_band_from_frequency(gint64 f) {
     }
   }
   if (found < 0) found=bandGen;
-  return found;  
+  return found;
 }
 
 int next_band(int current_band) {
@@ -618,7 +736,7 @@ int previous_band(int current_band) {
 }
 
 void set_band(RECEIVER *rx,int band,int bs_entry) {
-  // save current bandstack 
+  // save current bandstack
   BAND *b=&bands[rx->band_a];
   BANDSTACK *stack=b->bandstack;
   BANDSTACK_ENTRY *entry=&stack->entry[stack->current_entry];
@@ -642,8 +760,8 @@ void set_band(RECEIVER *rx,int band,int bs_entry) {
     b=&bands[band];
     stack=b->bandstack;
   } else {
-    stack->current_entry++;
-    if(stack->current_entry>=stack->entries) stack->current_entry=0;
+    //stack->current_entry++;
+    //if(stack->current_entry>=stack->entries) stack->current_entry=0;
   }
   if(bs_entry!=-1) {
     stack->current_entry=bs_entry;

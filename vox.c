@@ -32,60 +32,73 @@
 #include "ext.h"
 
 static int vox_timeout_cb(gpointer data) {
-  RADIO *r = (RADIO *)data;
-  r->vox_timeout = 0;
-  if (r->vox_enabled) {
-    r->vox = 0;
-    g_idle_add(ext_vox_changed, NULL);
+  RADIO *r=(RADIO *)data;
+  if(r->vox_enabled) {
+    r->vox=0;
+    g_idle_add(ext_vox_changed,NULL);
   }
   return FALSE;
 }
 
 void update_vox(RADIO *r) {
   // calculate peak microphone input
+  // assumes it is interleaved left and right channel with length samples
   int i;
   double sample;
-  r->vox_peak = 0.0;
-
-  for (i = 0; i < r->transmitter->buffer_size; i++) {
-    sample = (double)r->transmitter->mic_input_buffer[i];
-    if (sample < 0.0) {
-      sample = -sample;
+  r->vox_peak=0.0;
+  for(i=0;i<r->transmitter->buffer_size;i++) {
+    sample=(double)r->transmitter->mic_input_buffer[i];
+    if(sample<0.0) {
+      sample=-sample;
     }
-    if (sample > r->vox_peak) {
-      r->vox_peak = sample;
+    if(sample>r->vox_peak) {
+      r->vox_peak=sample;
     }
   }
 
-  // Handle VOX disable case — force TX off
-  if (!r->vox_enabled && r->vox) {
-    vox_cancel(r); // force off
-    return;
-  }
-
-  // Normal VOX operation
-  if (r->vox_enabled) {
-    if (r->vox_peak > r->vox_threshold) {
-      if (!r->vox) {
-        r->vox = 1;
-        g_idle_add(ext_vox_changed, NULL);
+  if(r->vox_enabled) {
+    if(r->vox_peak>r->vox_threshold) {
+      if(r->vox) {
+        g_source_remove(r->vox_timeout);
+      } else {
+        r->vox=1;
+        g_idle_add(ext_vox_changed,NULL);
       }
-
-      // Always reset hang timer
-      g_source_remove(r->vox_timeout);
-      r->vox_timeout = g_timeout_add((int)r->vox_hang, vox_timeout_cb, r);
+      r->vox_timeout=g_timeout_add((int)r->vox_hang,vox_timeout_cb,r);
     }
   }
 }
 
-void vox_cancel(RADIO *r) {
-  if (r->vox_timeout > 0) {
-    g_source_remove(r->vox_timeout);
-    r->vox_timeout = 0;
+void set_cwvox(RADIO *r, gboolean cw_key_state) {
+  r->hang_time_ctr = 0;
+  if (cw_key_state == 1) {
+    if(!r->mox) {
+      MOX_STATE *m=g_new0(MOX_STATE,1);
+      m->radio=r;
+      m->state=1;
+      g_idle_add(ext_set_mox,(gpointer)m);      
+    }
   }
+  else {
+    r->hang_time_ctr = 0;      
+  }
+}
 
-  if (r->vox) {
-    r->vox = 0;
-    g_idle_add(ext_vox_changed, NULL);
+void update_cwvox(RADIO *r) {
+  r->hang_time_ctr += r->protocol1_timer;
+        
+  if (r->hang_time_ctr > (double)r->cw_keyer_hang_time) {    
+    MOX_STATE *m=g_new0(MOX_STATE,1);
+    m->radio=r;
+    m->state=0;
+    g_idle_add(ext_set_mox,(gpointer)m); 
+  }
+}
+
+void vox_cancel(RADIO *r) {
+  if(r->vox) {
+    g_source_remove(r->vox_timeout);
+    r->vox=0;
+    g_idle_add(ext_vox_changed,NULL);
   }
 }

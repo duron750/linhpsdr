@@ -1,6 +1,0 @@
-*.o
-libwdsp.a
-libwdsp.dylib
-.vs/
-bin/
-build/

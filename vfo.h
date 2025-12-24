@@ -20,30 +20,7 @@
 extern GtkWidget *create_vfo(RECEIVER *rx);
 extern void update_vfo(RECEIVER *r);
 
-extern void SetColour(cairo_t *cr, const int colour);
 
-enum {
-  BACKGROUND=0,
-  OFF_WHITE=1,
-  BOX_ON = 2,
-  BOX_OFF = 3,
-  TEXT_A = 4,
-  TEXT_B = 5,
-  TEXT_C = 6,
-  WARNING = 7,
-  DARK_LINES = 8,
-  DARK_TEXT = 9,
-  INFO_ON = 10,
-  INFO_OFF = 11
-};
-
-enum {
-  CLICK_ON=0,
-  CLICK_OFF=1,
-  INFO_TRUE = 2,
-  INFO_FALSE = 3,
-  WARNING_ON = 4
-};
 
 typedef struct _vfo_data {
   GtkWidget *vfo;
@@ -60,7 +37,10 @@ typedef struct _vfo_data {
   GtkWidget *frequency_b_text;
   GtkWidget *subrx_b;
   GtkWidget *afgain_scale;
+  GtkWidget *squelch_scale;
   GtkWidget *agcgain_scale;
+  GtkWidget *squelch_label;
+  GtkWidget *ps_b;
   GtkWidget *lock_b;
   GtkWidget *mode_b;
   GtkWidget *filter_b;
@@ -72,17 +52,20 @@ typedef struct _vfo_data {
   GtkWidget *bmk_b;
   GtkWidget *ctun_b;
   GtkWidget *bpsk_b;
+  GtkWidget *ant_b;
   GtkWidget *rit_b;
   GtkWidget *rit_value;
   GtkWidget *xit_b;
   GtkWidget *xit_value;
   GtkWidget *dup_b;
+  GtkWidget *div_b;  
 } VFO_DATA;
 
-#define STEPS 15
+#define STEPS 16
 extern gint64 steps[STEPS];
 extern char *step_labels[STEPS];
 
 extern void vfo_a2b(RECEIVER *rx);
 extern void vfo_b2a(RECEIVER *rx);
 extern void vfo_aswapb(RECEIVER *rx);
+

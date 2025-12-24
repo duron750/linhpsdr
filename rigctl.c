@@ -703,6 +703,7 @@ static void rigctl_client(RECEIVER *rx) {
 
   g_print("%s: starting rigctl_client: socket=%d\n",__FUNCTION__,rigctl->socket_fd);
 
+  rx->cat_client_connected = TRUE;
   rigctl->socket_running=TRUE;
   while(rigctl->socket_running && (numbytes=recv(rigctl->socket_fd , cmd_input , MAXDATASIZE-2 , 0)) > 0 ) {
     for(i=0;i<numbytes;i++) {
@@ -722,6 +723,8 @@ static void rigctl_client(RECEIVER *rx) {
       }
     }
   }
+  rx->cat_client_connected = FALSE;
+  
 perror("recv");
 g_print("%s: running=%d numbytes=%d\n",__FUNCTION__,rigctl->socket_running,numbytes);
 }
@@ -1606,11 +1609,12 @@ gboolean parse_extended_cmd(COMMAND *cmd) {
           if(radio->transmitter) {
             if(command[4]==';') {
               // send reply back
-              sprintf(reply,"ZZLI%d;",radio->transmitter->puresignal);
+              sprintf(reply,"ZZLI%d;",radio->transmitter->puresignal_enabled);
               send_resp(cmd,reply) ;
             } else {
               int ps=atoi(&command[4]);
-              radio->transmitter->puresignal=ps;
+              // TODO enable PS via CAT
+              //radio->transmitter->puresignal_enabled=ps;
             }
             update_vfo(rx);
           } else {
@@ -1637,14 +1641,6 @@ gboolean parse_extended_cmd(COMMAND *cmd) {
             send_resp(cmd,reply);
           } else if(command[6]==';') {
             receiver_mode_changed(rx,atoi(&command[4]));
-            if (radio->transmitter) {
-                    if (rx->split == SPLIT_OFF) {
-                        transmitter_set_mode(radio->transmitter, rx->mode_a);
-                    } else {
-                        transmitter_set_mode(radio->transmitter, rx->mode_b);
-                    }
-                }
-                update_vfo(rx);
           }
           break;
         case 'E': //ZZME
@@ -3092,14 +3088,6 @@ int parse_cmd(void *data) {
                 break;
             }
             receiver_mode_changed(rx,mode);
-            if (radio->transmitter) {
-                    if (rx->split == SPLIT_OFF) {
-                        transmitter_set_mode(radio->transmitter, rx->mode_a);
-                    } else {
-                        transmitter_set_mode(radio->transmitter, rx->mode_b);
-                    }
-                }
-                update_vfo(rx);
           }
           break;
         case 'F': //MF

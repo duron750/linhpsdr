@@ -52,11 +52,10 @@
 #ifdef MIDI
 #include "midi.h"
 #include "midi_dialog.h"
-#include "noise_menu.h"
-
 #endif
+#include "diversity_dialog.h"
 
-int rx_base=4; // number of tabs before receivers
+int rx_base=3; // number of tabs before receivers
 
 static GtkWidget *notebook;
 
@@ -65,9 +64,7 @@ static gboolean delete_event(GtkWidget *widget, GdkEvent *event, gpointer data) 
   int i;
 
   save_xvtr();
-#ifdef MIDI
   configure_midi_device(false);
-#endif
   radio->dialog=NULL;
   for(i=0;i<radio->discovered->supported_receivers;i++) {
     if(radio->receiver[i]!=NULL) {
@@ -90,63 +87,77 @@ static gboolean switch_page_event(GtkNotebook *notebook,GtkWidget *page,guint pa
     //g_print("switch_page: %d %s rx=%d\n",page_num,text,rx);
     update_receiver_dialog(radio->receiver[rx]);
   }
-  if(strncmp("TX",text,2)==0) {
+  else if(strncmp("TX",text,2)==0) {
     update_transmitter_dialog(radio->transmitter);
   }
+  else if(strncmp("DMIX",text,4)==0) {
+    update_transmitter_dialog(radio->transmitter);
+  }  
+  else if(strncmp("OC",text,2)==0) {
+    update_oc_dialog(radio);
+  }  
+  
   return TRUE;
 }
 
-GtkWidget *create_configure_dialog(RADIO *radio, int tab) {
-    int i;
-    gchar title[64];
+GtkWidget *create_configure_dialog(RADIO *radio,int tab) {
+  int i;
+  gchar title[64];
 
-    g_snprintf((gchar *)&title, sizeof(title), "Linux HPSDR: %s %s", radio->discovered->name, inet_ntoa(radio->discovered->info.network.address.sin_addr));
+  g_snprintf((gchar *)&title,sizeof(title),"Linux HPSDR: %s %s",radio->discovered->name,inet_ntoa(radio->discovered->info.network.address.sin_addr));
 
-    GtkWidget *dialog = gtk_dialog_new();
-    gtk_window_set_transient_for(GTK_WINDOW(dialog), GTK_WINDOW(main_window));
-    gtk_window_set_title(GTK_WINDOW(dialog), title);
-    g_signal_connect(dialog, "delete_event", G_CALLBACK(delete_event), (gpointer)radio);
+  GtkWidget *dialog=gtk_dialog_new();
+  gtk_window_set_transient_for(GTK_WINDOW(dialog),GTK_WINDOW(main_window));
+  gtk_window_set_title(GTK_WINDOW(dialog),title);
+  g_signal_connect (dialog,"delete_event",G_CALLBACK(delete_event),(gpointer)radio);
 
-    GtkWidget *content = gtk_dialog_get_content_area(GTK_DIALOG(dialog));
+  GtkWidget *content=gtk_dialog_get_content_area(GTK_DIALOG(dialog));
 
-    notebook = gtk_notebook_new();
+  notebook=gtk_notebook_new();
 
-    gtk_notebook_append_page(GTK_NOTEBOOK(notebook), create_radio_dialog(radio), gtk_label_new("Radio"));
-    gtk_notebook_append_page(GTK_NOTEBOOK(notebook), create_oc_dialog(radio), gtk_label_new("OC"));
-    gtk_notebook_append_page(GTK_NOTEBOOK(notebook), create_xvtr_dialog(radio), gtk_label_new("XVTR"));
-    gtk_notebook_append_page(GTK_NOTEBOOK(notebook), create_noise_menu_dialog(radio), gtk_label_new("Noise")); // New tab
+  gtk_notebook_append_page(GTK_NOTEBOOK(notebook),create_radio_dialog(radio),gtk_label_new("Radio"));
+  gtk_notebook_append_page(GTK_NOTEBOOK(notebook),create_oc_dialog(radio),gtk_label_new("OC"));
+  gtk_notebook_append_page(GTK_NOTEBOOK(notebook),create_xvtr_dialog(radio),gtk_label_new("XVTR"));
 
-    for (i = 0; i < radio->discovered->supported_receivers; i++) {
-        if (radio->receiver[i] != NULL) {
-            g_snprintf((gchar *)&title, sizeof(title), "RX-%d", radio->receiver[i]->channel);
-            gtk_notebook_append_page(GTK_NOTEBOOK(notebook), create_receiver_dialog(radio->receiver[i]), gtk_label_new(title));
-        }
+  for(i=0;i<radio->discovered->supported_receivers;i++) {
+    if(radio->receiver[i]!=NULL) {
+      g_snprintf((gchar *)&title,sizeof(title),"RX-%d",radio->receiver[i]->channel);
+      gtk_notebook_append_page(GTK_NOTEBOOK(notebook),create_receiver_dialog(radio->receiver[i]),gtk_label_new(title));
     }
+  }
 
-    if (radio->can_transmit) {
-        gtk_notebook_append_page(GTK_NOTEBOOK(notebook), create_transmitter_dialog(radio->transmitter), gtk_label_new("TX"));
-        gtk_notebook_append_page(GTK_NOTEBOOK(notebook), create_puresignal_dialog(radio->transmitter), gtk_label_new("Pure Signal"));
-        gtk_notebook_append_page(GTK_NOTEBOOK(notebook), create_pa_dialog(radio), gtk_label_new("PA"));
-        gtk_notebook_append_page(GTK_NOTEBOOK(notebook), create_eer_dialog(radio), gtk_label_new("EER"));
+  for(i=0; i < MAX_DIVERSITY_MIXERS; i++) {
+    if(radio->divmixer[i]!=NULL) {
+      g_snprintf((gchar *)&title,sizeof(title),"DMIX-%d",radio->divmixer[i]->id );
+      gtk_notebook_append_page(GTK_NOTEBOOK(notebook),create_diversity_dialog(radio->divmixer[i]),gtk_label_new(title));
     }
+  }
 
-    if (radio->wideband) {
-        gtk_notebook_append_page(GTK_NOTEBOOK(notebook), create_wideband_dialog(radio->wideband), gtk_label_new("Wideband"));
-    }
+  if(radio->can_transmit) {
+    gtk_notebook_append_page(GTK_NOTEBOOK(notebook),create_transmitter_dialog(radio->transmitter),gtk_label_new("TX"));
+    gtk_notebook_append_page(GTK_NOTEBOOK(notebook),create_puresignal_dialog(radio->transmitter),gtk_label_new("Pure Signal"));
+    gtk_notebook_append_page(GTK_NOTEBOOK(notebook),create_pa_dialog(radio),gtk_label_new("PA"));
+    gtk_notebook_append_page(GTK_NOTEBOOK(notebook),create_eer_dialog(radio),gtk_label_new("EER"));
+  }
+
+  if(radio->wideband) {
+    gtk_notebook_append_page(GTK_NOTEBOOK(notebook),create_wideband_dialog(radio->wideband),gtk_label_new("Wideband"));
+  }
 
 #ifdef MIDI
-    gtk_notebook_append_page(GTK_NOTEBOOK(notebook), create_midi_dialog(radio), gtk_label_new("MIDI"));
+  gtk_notebook_append_page(GTK_NOTEBOOK(notebook),create_midi_dialog(radio),gtk_label_new("MIDI"));
 #endif
 
-    gtk_notebook_append_page(GTK_NOTEBOOK(notebook), create_about_dialog(radio), gtk_label_new("About"));
+  gtk_notebook_append_page(GTK_NOTEBOOK(notebook),create_about_dialog(radio),gtk_label_new("About"));
 
-    gtk_container_add(GTK_CONTAINER(content), notebook);
-    gtk_widget_show_all(dialog);
-    gtk_notebook_set_current_page(GTK_NOTEBOOK(notebook), tab);
+  gtk_container_add(GTK_CONTAINER(content),notebook);
+  gtk_widget_show_all(dialog);
+  gtk_notebook_set_current_page(GTK_NOTEBOOK(notebook),tab);
 
-    g_signal_connect(notebook, "switch-page", G_CALLBACK(switch_page_event), (gpointer)radio);
+  g_signal_connect (notebook,"switch-page",G_CALLBACK(switch_page_event),(gpointer)radio);
 
-    return dialog;
+  return dialog;
+
 }
 
 void configure_dialog_set_tab(int tab) {

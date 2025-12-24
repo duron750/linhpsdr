@@ -1,26 +1,8 @@
 # LinHPSDR
 
-### Whats new in Reimagined!
+### Development environment
 
-Added RingBuffer for IQ samples, this greatly improves audio quality.
-Optimized Panadapter and Waterfall for better performance.
-Moved WDSP (DSP Processing) to a seperate thread to improve performance.
-Added NR2 Trained and new noise menu.
-Fixed TX OC
-Added Fequency Calibration
-Various other tweaks and fixes!
-
-6/2/2025 -  Added TX compressor.  Set to disable all DSP functions in DIGI Mode
-
-Please note: This is very beta, and is constantly updating!  Use SOUNDIO for audio, its non blocking and better for slower machines!
-
-Mods make this run pretty good on a RPI 4!  But a x86 pc running debian would give best results!
-
-Thanks,
-
-W4WHL
-
-
+Development and testing has been run on Ubuntu and Arch Linux. If run on early versions there may be a problem with GTK not supporting the gtk_menu_popup_at_pointer function vfo.c. For information on MacOS support see [MacOS.md](./MacOS.md).
 
 ### Prerequisites for building
 
@@ -44,25 +26,88 @@ W4WHL
 ```
 
 
+### linhpsdr requires WDSP to be built and installed
+
+```
+  git clone https://github.com/g0orx/wdsp.git
+  cd wdsp
+  make
+  sudo make install
+```
+### CW support
+
+Hermes and HL2 CWX/cwdaemon support added. If you do not wish to use this, please ignore. This features requires the following to be installed (tested on Ubuntu 19.10, Kubuntu 18.04 LTS):
+
+```
+  sudo apt install libtool
+  git clone https://git.code.sf.net/p/unixcw/code unixcw-code 
+  cd unixcw-code
+  git fetch --tags
+  git checkout tags/v3.6.0
+  autoreconf -i
+  ./configure
+  make
+  sudo make install
+  sudo ldconfig
+```
+If CWX/cwdaemon is wanted/required. You must enable it in the Makefile. Uncomment the following lines:
+```
+#CWDAEMON_INCLUDE=CWDAEMON
+
+#ifeq ($(CWDAEMON_INCLUDE),CWDAEMON)
+#CWDAEMON_OPTIONS=-D CWDAEMON
+#CWDAEMON_LIBS=-lcw
+#CWDAEMON_SOURCES= \
+#cwdaemon.c
+#CWDAEMON_HEADERS= \
+#cwdaemon.h
+#CWDAEMON_OBJS= \
+#cwdaemon.o
+#endif
+```
 
 ### To download, compile and install linHPSDR from here
 
 ```
-  git clone https://github.com/willardharris/linhpsdr.git
-  cd linhpsdr/wdsp
-  make clean
+  git clone https://github.com/m5evt/linhpsdr.git
+  cd linhpsdr
   make
   sudo make install
-  cd ..
-  make clean
-  make
-  sudo make install
-  
 ```
-Added by duron750:
-- add keyboard shortcuts for fine and coarse frequency change using arrow keys
-- Arrow UP: change frequency UP coarse
-- Arrow DOWN: change frequency DOWN coarse
-- Arrow LEFT: change frequency down fine
-- Arrow RIGHT: change frequency up fine
-- F/f: enter frequency manually
+
+# LinHPSDR MacOS Support
+  
+### Development environment
+
+Development and testing has been run on MacOS Sierra 10.12.6 and MacOS high Sierra 10.13.6. Prerequisites are installed using [Homebrew](https://brew.sh/).
+
+### Prerequisites for building
+
+```
+  brew install fftw
+  brew install gtk+3
+  brew install gnome-icon-theme
+  brew install libsoundio
+  brew install libffi
+  brew install soapysdr
+```
+
+### linhpsdr requires WDSP to be built and installed
+
+```
+  git clone https://github.com/g0orx/wdsp.git
+  cd wdsp
+  make -f Makefile.mac install
+```
+
+### To download, compile and install linHPSDR
+
+```
+  git clone https://github.com/m5evt/linhpsdr.git
+  cd linhpsdr
+  make -f Makefile.mac install
+```
+
+The build installs linHPSDR into `/usr/local/bin`. To run it, type `linhpsdr` on the command line.
+
+

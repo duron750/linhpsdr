@@ -37,6 +37,8 @@ enum {
    band12,
    band10,
    band6,
+   bandGen,
+   bandWWV,
 #if defined(SOAPYSDR)
    band70,
    band144,
@@ -47,11 +49,7 @@ enum {
    band2300,
    band3400,
    bandAIR,
-   bandGen,
-   bandWWV,
 #else
-   bandGen,
-   bandWWV,
 #endif
    BANDS
 };
@@ -121,6 +119,7 @@ extern BANDSTACK_ENTRY *bandstack_entry_get_current();
 
 extern void bandSaveState();
 extern void bandRestoreState();
+extern void change_filters(void);
 
 extern int next_band(int current_band);
 extern int previous_band(int current_band);

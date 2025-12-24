@@ -68,9 +68,11 @@ extern GMutex cwdaemon_mutex;
 
 extern bool keytx;
 extern bool keysidetone;
+extern double cwd_changed_at;
 
 
 extern void cwdaemon_stop(void);
+extern int cwdaemon_start(void);
 extern void cwdaemon_close_socket(void);
 extern void cwdaemon_close_libcw_output(void);
 

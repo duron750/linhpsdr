@@ -20,6 +20,14 @@
 #ifndef TRANSMITTER_H
 #define TRANSMITTER_H
 
+#define NUM_TX_METERS 4 // PA current, PA temp, HL2 temp, PWR out
+#define PEAK_DETECT_BUF_SIZE 40
+
+#include "ringbuffer.h"
+#include "peak_detect.h"
+#include "tx_info_meter.h"
+#include "puresignal.h"
+
 #define CTCSS_FREQUENCIES 38
 extern double ctcss_frequencies[CTCSS_FREQUENCIES];
 
@@ -27,7 +35,6 @@ typedef struct _transmitter {
   gint channel; // WDSP channel
 
   gint dac;
-  
   GMutex queue_mutex;  
 
   gint alex_antenna;
@@ -44,12 +51,19 @@ typedef struct _transmitter {
   gdouble rev;
   gdouble alc;
   gdouble swr;
+  PEAKDETECTOR *fwd_peak_buf;    
+  gdouble fwd_peak;
+  
 
   GtkWidget *window;
   gint window_width;
   gint window_height;
 
   RECEIVER *rx;
+  
+  TXMETER *tx_info_meter[NUM_TX_METERS+1];
+  GtkWidget *tx_info;
+  gint num_tx_info_meters;
 
   gdouble drive;
   gdouble tune_percent;
@@ -80,8 +94,20 @@ typedef struct _transmitter {
   gint mic_samples;
   gdouble *mic_input_buffer;
   gdouble *iq_output_buffer;
-  //
+  // Protocol 1 packet scheduling
   guint packet_counter;
+
+  
+  RINGBUFFERL *p1_ringbuf;  
+  
+
+  
+  #ifdef CWDAEMON
+  // PC generated cw
+  glong cw_waveform_idx;
+  RINGBUFFERL *cw_iq_delay_buf;  
+  gboolean last_key_state;
+  #endif
   
   gfloat *inI, *inQ, *outMI, *outMQ; // for EER
   gint mic_sample_rate;
@@ -122,11 +148,16 @@ typedef struct _transmitter {
 
   GtkWidget *dialog;
 
-  gboolean puresignal;
+  PSIGNAL *puresignal;
+  gboolean puresignal_enabled;
   gboolean ps_twotone;
   gboolean ps_feedback;
   gboolean ps_auto;
   gboolean ps_single;
+#ifdef PURESIGNAL
+  RECEIVER *rx_puresignal_txfbk;
+  RECEIVER *rx_puresignal_rxfbk;
+#endif 
   GtkWidget *ps;
   cairo_surface_t *ps_surface;
   gint ps_timer_id;
@@ -156,6 +187,7 @@ extern void transmitter_init_analyzer(TRANSMITTER *tx);
 extern void transmitter_save_state(TRANSMITTER *tx);
 extern void transmitter_restore_state(TRANSMITTER *tx);
 extern void add_mic_sample(TRANSMITTER *tx,float sample);
+extern void add_ps_iq_samples(TRANSMITTER *tx, double i_sample_tx,double q_sample_tx, double i_sample_rx, double q_sample_rx);
 extern void transmitter_set_filter(TRANSMITTER *tx,int low,int high);
 extern void transmitter_set_pre_emphasize(TRANSMITTER *tx,int state);
 extern void transmitter_set_mode(TRANSMITTER *tx,int mode);
@@ -168,8 +200,9 @@ extern void transmitter_set_ps(TRANSMITTER *tx,gboolean state);
 extern void transmitter_set_twotone(TRANSMITTER *tx,gboolean state);
 extern void transmitter_set_ps_sample_rate(TRANSMITTER *tx,int rate);
 
-extern void QueueInit(void);
-extern void full_tx_buffer(TRANSMITTER *tx);
+extern int transmitter_get_mode(TRANSMITTER *tx);
+extern long long transmitter_get_frequency(TRANSMITTER *tx);
+extern void full_tx_buffer(TRANSMITTER *tx, gboolean force_send);
 
 extern void transmitter_enable_eer(TRANSMITTER *tx,gboolean state);
 extern void transmitter_set_eer_mode_amiq(TRANSMITTER *tx,gboolean state);

@@ -26,6 +26,7 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <sys/time.h>
+
 #include <wdsp.h>
 
 #include "alex.h"
@@ -41,6 +42,7 @@
 #include "wideband.h"
 #include "adc.h"
 #include "dac.h"
+#include "diversity_mixer.h"
 #include "radio.h"
 #include "tx_panadapter.h"
 #include "protocol1.h"
@@ -60,6 +62,7 @@
 //#include "rigctl.h"
 #include "receiver_dialog.h"
 #include "subrx.h"
+#include "hl2.h"
 
 #ifdef MIDI
 #include "midi.h"
@@ -74,15 +77,6 @@ static GtkWidget *add_receiver_b;
 static GtkWidget *add_wideband_b;
 
 static void rxtx(RADIO *r);
-
-static gboolean update_mic_meter(gpointer data) {
-  RADIO *r = (RADIO *)data;
-  if (r->mic_meter && r->local_microphone) {
-    // vox_peak is already normalized to 0.0-1.0
-    gtk_progress_bar_set_fraction(GTK_PROGRESS_BAR(r->mic_meter), r->vox_peak);
-  }
-  return G_SOURCE_CONTINUE; // Keep the timer running
-}
 
 int radio_restart(void *data) {
   RADIO *r=(RADIO *)data;
@@ -108,7 +102,7 @@ int radio_start(void *data) {
 fprintf(stderr,"radio_start\n");
   switch(r->discovered->protocol) {
     case PROTOCOL_1:
-      protocol1_run();
+      protocol1_run(r);
       break;
     case PROTOCOL_2:
       break;
@@ -156,6 +150,8 @@ g_print("radio_save_state: %s\n",filename);
 
   sprintf(value,"%d",radio->model);
   setProperty("radio.model",value);
+  sprintf(value,"%d",radio->filter_board);
+  setProperty("radio.filter_board",value);  
   sprintf(value,"%d",radio->sample_rate);
   setProperty("radio.sample_rate",value);
   sprintf(value,"%d",radio->buffer_size);
@@ -188,6 +184,16 @@ g_print("radio_save_state: %s\n",filename);
   setProperty("radio.cw_keyer_hang_time",value);
   sprintf(value,"%d",radio->cw_breakin);
   setProperty("radio.cw_breakin",value);
+  #ifdef CWDAEMON
+  sprintf(value,"%d",radio->cwd_port);
+  setProperty("radio.cwd_port",value);  
+  sprintf(value,"%d",radio->cwd_sidetone);
+  setProperty("radio.cwd_sidetone",value);    
+  sprintf(value,"%d",radio->cw_generation_mode);
+  setProperty("radio.cw_generation_mode",value);    
+  sprintf(value,"%d",radio->cwdaemon_running);
+  setProperty("radio.cwdaemon_running",value);    
+  #endif
   sprintf(value,"%d",radio->local_microphone);
   setProperty("radio.local_microphone",value);
   sprintf(value,"%d",radio->mic_boost);
@@ -250,6 +256,11 @@ g_print("radio_save_state: %s\n",filename);
 #endif
   }
 
+  if (radio->hl2 != NULL) {
+    sprintf(value,"%d",radio->hl2->hl2_tx_buffer_size);
+    setProperty("radio.hl2.tx_buffer_size",value);
+  }
+
   sprintf(value,"%d",radio->filter_board);
   setProperty("radio.filter_board",value);
 
@@ -278,14 +289,6 @@ g_print("radio_save_state: %s\n",filename);
 
   sprintf(value,"%d",radio->which_audio_backend);
   setProperty("radio.which_audio_backend",value);
-
-  sprintf(value,"%d",radio->penelope);
-  setProperty("radio.penelope",value);
-
-  sprintf(value,"%d",radio->frequency_calibration_offset);
-  setProperty("radio.frequency_calibration_offset",value);
-
-  
 
   filterSaveState();
   bandSaveState();
@@ -351,10 +354,10 @@ void radio_restore_state(RADIO *radio) {
 
   value=getProperty("radio.model");
   if(value!=NULL) radio->model=atoi(value);
-
+  value=getProperty("radio.filter_board");
+  if(value!=NULL) radio->filter_board=atoi(value);
   value=getProperty("radio.sample_rate");
   if(value!=NULL) radio->sample_rate=atoi(value);
-  
   value=getProperty("radio.meter_calibration");
   if(value) radio->meter_calibration=atof(value);
   value=getProperty("radio.panadapter_calibration");
@@ -379,6 +382,16 @@ void radio_restore_state(RADIO *radio) {
   if(value!=NULL) radio->cw_keyer_hang_time=atoi(value);
   value=getProperty("radio.cw_breakin");
   if(value!=NULL) radio->cw_breakin=atoi(value);
+  #ifdef CWDAEMON
+  value=getProperty("radio.cwd_sidetone");
+  if(value!=NULL) radio->cwd_sidetone=atoi(value);  
+  value=getProperty("radio.cwd_port");
+  if(value!=NULL) radio->cwd_port=atoi(value);   
+  value=getProperty("radio.cw_generation_mode");
+  if(value!=NULL) radio->cw_generation_mode = atoi(value);   
+  value=getProperty("radio.cwdaemon_running");
+  if(value!=NULL) radio->cwdaemon_running = atoi(value);   
+  #endif  
 
   for(int i=0;i<radio->discovered->adcs;i++) {
     sprintf(name,"radio.adc[%d].filters",i);
@@ -426,6 +439,11 @@ void radio_restore_state(RADIO *radio) {
 #endif
   }
 
+  if(radio->hl2 != NULL) {
+    value=getProperty("radio.hl2.tx_buffer_size");
+    if(value!=NULL) radio->hl2->hl2_tx_buffer_size = atoi(value);  
+  }
+
   value=getProperty("radio.local_microphone");
   if(value!=NULL) radio->local_microphone=atoi(value);
   value=getProperty("radio.microphone_name");
@@ -445,6 +463,8 @@ void radio_restore_state(RADIO *radio) {
   if(value!=NULL) radio->mic_linein=atoi(value);
   value=getProperty("radio.linein_gain");
   if(value!=NULL) radio->linein_gain=atoi(value);
+  value=getProperty("radio.filter_board");
+  if(value!=NULL) radio->filter_board=atoi(value);  
   value=getProperty("radio.region");
   if(value!=NULL) radio->region=atoi(value);
   value=getProperty("radio.classE");
@@ -478,12 +498,6 @@ void radio_restore_state(RADIO *radio) {
   value=getProperty("radio.midi_enabled");
   if(value) radio->midi_enabled=atoi(value);
 #endif
-
-  value=getProperty("radio.penelope");
-  if(value) radio->penelope=atoi(value);
-
-  value=getProperty("radio.frequency_calibration_offset");
-  if(value) radio->frequency_calibration_offset=atoi(value);
 
   filterRestoreState();
   bandRestoreState();
@@ -519,6 +533,24 @@ void radio_change_region(RADIO *r) {
     bandstack60.entry=bandstack_entries60_OTHER;
   }
 }
+
+#ifdef CWDAEMON
+void radio_change_cwgeneration(RADIO *r) {
+  g_print("radio_change_cwgeneration gen mode %d keyer %d\n", r->cw_generation_mode, r->cw_keyer_internal);
+  if (r->cw_generation_mode == CWGEN_RADIO) {
+    // Hermes Lite 2 does not have an internal keyer, but does have
+    // cwx (key down command sent from PC), HL2 uses protocol 1
+    // cw_keyer_internal bit to turn on/off cw. Safest for the HL2 to never
+    // set this bit.
+    if (r->discovered->device != DEVICE_HERMES_LITE2) r->cw_keyer_internal = TRUE;
+  }
+  else {
+    // r->cw_generation_mode == CWGEN_PC
+    // PC generated CW, disable internal keyer in the radio
+    r->cw_keyer_internal = FALSE;
+  }
+}
+#endif
 
 void radio_change_audio(RADIO *r,int selected) {
   int i;
@@ -564,21 +596,63 @@ void radio_change_audio_backend(RADIO *r,int selected) {
   create_audio(r->which_audio_backend,r->which_audio==USE_SOUNDIO?audio_get_backend_name(r->which_audio_backend):NULL);
 }
 
-
 void vox_changed(RADIO *r) {
   rxtx(radio);
 }
 
 void frequency_changed(RECEIVER *rx) {
+    
+    // Diversity mixer hidden rx synced to the rx which is
+    // visualised    
+    if (radio->divmixer[rx->dmix_id] != NULL) {
+      if (radio->divmixer[rx->dmix_id]->rx_visual == rx) {
+        radio->divmixer[rx->dmix_id]->rx_hidden->frequency_a = rx->frequency_a;    
+        radio->divmixer[rx->dmix_id]->rx_hidden->frequency_b = rx->frequency_b;  
+      }
+    }  
+    
+    if (radio->hl2 != NULL) {     
+      if (rx->lo_a != 0) {
+        radio->hl2->xvtr = TRUE;
+        gtk_widget_set_sensitive(add_receiver_b, FALSE);
+        HL2clock2Status(radio->hl2, TRUE, &rx->lo_a);
+      }
+      else { 
+        gtk_widget_set_sensitive(add_receiver_b, TRUE);              
+        radio->hl2->xvtr = FALSE;        
+        HL2clock2Status(radio->hl2, FALSE, &rx->lo_a);        
+      }
+    }
+    
   if(rx->ctun) {
     gint64 offset;
     rx->ctun_offset=rx->ctun_frequency-rx->frequency_a;
     offset=rx->ctun_offset;
+    /*
+    if(rx->mode_a==CWU) {
+      offset+=(gint64)radio->cw_keyer_sidetone_frequency;
+    } else if(rx->mode_a==CWL) {
+      offset-=(gint64)radio->cw_keyer_sidetone_frequency;
+    }
+    */
     if(rx->rit_enabled) {
       offset+=rx->rit;
     }
     SetRXAShiftFreq(rx->channel, (double)offset);
     RXANBPSetShiftFrequency(rx->channel, (double)offset);
+    
+    
+    // Diversity mixer hidden rx synced to the rx which is
+    // visualised, this allow CTUN to work       
+    if (radio->divmixer[rx->dmix_id] != NULL) {
+      if (radio->divmixer[rx->dmix_id]->rx_visual == rx) {      
+        int channel = radio->divmixer[rx->dmix_id]->rx_hidden->channel;
+                 
+        SetRXAShiftFreq(channel, (double)offset);
+        RXANBPSetShiftFrequency(channel, (double)offset);      
+      }
+    }
+    
 #ifdef SOAPYSDR
     if(radio->discovered->protocol==PROTOCOL_SOAPYSDR) {
       // delay setting tx frequency until transmit
@@ -630,212 +704,103 @@ void delete_wideband(WIDEBAND *w) {
     gtk_widget_destroy(radio->dialog);
     radio->dialog=NULL;
   }
-}
-
-// Helper function for thread join with timeout
-gboolean g_thread_join_timeout(GThread *thread, gdouble timeout_seconds) {
-    GTimer *timer = g_timer_new();
-    while (g_timer_elapsed(timer, NULL) < timeout_seconds) {
-        if (g_thread_join(thread)) {
-            g_timer_destroy(timer);
-            return TRUE;
-        }
-        g_usleep(10000); // Sleep 10ms
-    }
-    g_timer_destroy(timer);
-    fprintf(stderr, "g_thread_join_timeout: thread did not terminate within %f seconds\n", timeout_seconds);
-    return FALSE;
+  protocol1_stop();  
+  protocol1_run();  
 }
 
 void delete_receiver(RECEIVER *rx) {
-    if (!rx) {
-        fprintf(stderr, "delete_receiver: rx is NULL\n");
-        return;
-    }
-
-    int ch = rx->channel;
-    
-    g_print("delete_receiver: channel=%d\n", ch);
-
-    // Stop protocol to prevent new data processing
-    if (radio->receiver[ch] == rx) {
-        switch (radio->discovered->protocol) {
-            case PROTOCOL_1:
-                protocol1_stop();
-                break;
-            case PROTOCOL_2:
-                protocol2_stop();
-                break;
-#ifdef SOAPYSDR
-            case PROTOCOL_SOAPYSDR:
-                soapy_protocol_stop();
-                break;
+  
+  g_mutex_lock(&radio->delete_rx_mutex);  
+  
+  // Receiver may have a diveristy mixer connected,
+  // this removes the mixer and hidden rx for that mixer
+  if (radio->divmixer[rx->dmix_id] != NULL) {
+    g_print("Not null, delete the hidden rx\n");
+    delete_diversity_mixer(radio->divmixer[rx->dmix_id]);
+  }
+ 
+  int reopen_rx = 0;
+#ifdef PURESIGNAL
+  if (radio->transmitter->puresignal != NULL) {
+    if (rx->show_rx == TRUE) reopen_rx = 1;
+  }
 #endif
+  
+  int i;
+  for(i=0;i<radio->discovered->supported_receivers;i++) {
+    if(radio->receiver[i]==rx) {
+      if(radio->discovered->protocol==PROTOCOL_1) {
+        protocol1_stop();
+      }
+      if(radio->transmitter!=NULL && radio->transmitter->rx==rx) {
+        radio->transmitter->rx=NULL;
+      }
+      radio->receiver[i]=NULL;
+      radio->receivers--;
+      if(radio->discovered->protocol==PROTOCOL_1) {
+        //protocol1_run();
+        //metis_restart();
+        protocol1_stop();
+
+      }
+g_print("delete_receiver: receivers now %d\n",radio->receivers);
+      break;
+    }
+  }
+
+  if(radio->transmitter!=NULL && radio->transmitter->rx==NULL) {
+    if(radio->receivers>0) {
+      for(i=0;i<radio->discovered->supported_receivers;i++) {
+        if(radio->receiver[i]!=NULL) {
+          radio->transmitter->rx=radio->receiver[i];
+          update_vfo(radio->receiver[i]);
+          break;
         }
+      }
+    } else {
+      // no more receivers
+    }
+  }
 
-        // Remove receiver from radio
-        radio->receiver[ch] = NULL;
-        radio->receivers--;
-    }
+  gtk_widget_set_sensitive(add_receiver_b,radio->receivers<radio->discovered->supported_receivers);
+  if(radio->dialog) {
+    gtk_widget_destroy(radio->dialog);
+    radio->dialog=NULL;
+  }
+  // For PureSignal, need to reopen the receiver just deleted
+  // as a hidden rx
+  if (reopen_rx == 1) add_receiver(radio, 0);
 
-    // Reassign transmitter RX if needed
-    if (radio->transmitter && radio->transmitter->rx == rx) {
-        radio->transmitter->rx = NULL;
-        for (int i = 0; i < radio->discovered->supported_receivers; i++) {
-            if (radio->receiver[i]) {
-                radio->transmitter->rx = radio->receiver[i];
-                update_vfo(radio->receiver[i]);
-                break;
-            }
-        }
-    }
+  g_idle_add(radio_restart,(void *)radio);
+ 
 
-    // Stop update timer
-    if (rx->update_timer_id) {
-        g_source_remove(rx->update_timer_id);
-        rx->update_timer_id = 0;
-    }
-
-    // Signal threads to stop
-    ReceiverThreadContext *ctx = &rx->thread_context;
-    ctx->running = FALSE;
-
-    // Push termination signals to queues
-    if (ctx->iq_queue) {
-        g_async_queue_push(ctx->iq_queue, GINT_TO_POINTER(-1));
-    }
-    if (ctx->render_queue) {
-        g_async_queue_push(ctx->render_queue, GINT_TO_POINTER(-1));
-    }
-
-    // Just KILL them
-    if (ctx->wdsp_thread) {
-        //if (!g_thread_join_timeout(ctx->wdsp_thread, 0.1)) {
-        //    fprintf(stderr, "delete_receiver: wdsp_thread (channel=%d) did not terminate\n", ch);
-        //}
-        ctx->wdsp_thread = NULL;
-    }
-    if (ctx->render_thread) {
-        //if (!g_thread_join_timeout(ctx->render_thread, 0.1)) {
-        //    fprintf(stderr, "delete_receiver: render_thread (channel=%d) did not terminate\n", ch);
-        //}
-        ctx->render_thread = NULL;
-    }
-
-    // Close WDSP channel
-    CloseChannel(rx->channel);
-
-    // Clean up queues and mutexes
-    if (ctx->iq_queue) {
-        g_async_queue_unref(ctx->iq_queue);
-        ctx->iq_queue = NULL;
-    }
-    if (ctx->render_queue) {
-        g_async_queue_unref(ctx->render_queue);
-        ctx->render_queue = NULL;
-    }
-    g_mutex_clear(&ctx->render_mutex);
-
-    // Free ring buffer with mutex protection
-    g_mutex_lock(&rx->iq_ring_buffer.mutex);
-    if (rx->iq_ring_buffer.buffer) {
-        g_free(rx->iq_ring_buffer.buffer);
-        rx->iq_ring_buffer.buffer = NULL;
-    }
-    g_mutex_unlock(&rx->iq_ring_buffer.mutex);
-    g_mutex_clear(&rx->iq_ring_buffer.mutex);
-
-    // Free other buffers
-    if (rx->pixel_samples) {
-        g_free(rx->pixel_samples);
-        rx->pixel_samples = NULL;
-    }
-    if (rx->iq_input_buffer) {
-        g_free(rx->iq_input_buffer);
-        rx->iq_input_buffer = NULL;
-    }
-    if (rx->audio_output_buffer) {
-        g_free(rx->audio_output_buffer);
-        rx->audio_output_buffer = NULL;
-    }
-    if (rx->audio_buffer) {
-        g_free(rx->audio_buffer);
-        rx->audio_buffer = NULL;
-    }
-    if (rx->local_audio_buffer) {
-        g_free(rx->local_audio_buffer);
-        rx->local_audio_buffer = NULL;
-    }
-    if (rx->audio_name) {
-        g_free(rx->audio_name);
-        rx->audio_name = NULL;
-    }
-
-    // Clean up subreceiver and BPSK
-    if (rx->subrx) {
-        destroy_subrx(rx->subrx); // Assumes destroy_subrx exists
-        rx->subrx = NULL;
-    }
-    if (rx->bpsk) {
-        destroy_bpsk(rx->bpsk); // Assumes destroy_bpsk exists
-        rx->bpsk = NULL;
-    }
-
-    // Clean up GTK widgets
-    if (rx->window && GTK_IS_WIDGET(rx->window)) {
-        gtk_widget_destroy(rx->window);
-        rx->window = NULL;
-    }
-    if (rx->bookmark_dialog && GTK_IS_WIDGET(rx->bookmark_dialog)) {
-        gtk_widget_destroy(rx->bookmark_dialog);
-        rx->bookmark_dialog = NULL;
-    }
-    if (radio->dialog && GTK_IS_WIDGET(radio->dialog)) {
-        gtk_widget_destroy(radio->dialog);
-        radio->dialog = NULL;
-    }
-
-    // Update GTK button sensitivity
-    gtk_widget_set_sensitive(add_receiver_b, radio->receivers < radio->discovered->supported_receivers);
-
-    // Clean up mutexes
-    g_mutex_clear(&rx->mutex);
-    g_mutex_clear(&rx->local_audio_mutex);
-    
-    // Restart protocol after cleanup
-    if (radio->receiver[ch] == NULL) {
-        switch (radio->discovered->protocol) {
-            case PROTOCOL_1:
-                protocol1_run();
-                break;
-            case PROTOCOL_2:
-                protocol2_run();
-                break;
-#ifdef SOAPYSDR
-            case PROTOCOL_SOAPYSDR:
-                soapy_protocol_start_receiver(NULL); // Adjust as needed
-                break;
-#endif
-        }
-    }
-
-    g_print("delete_receiver: cleaned up receiver channel=%d\n", ch);
-    g_free(rx);
+  g_mutex_unlock(&radio->delete_rx_mutex);  
 }
 
-static gboolean delete_receiver_idle_cb(gpointer data) {
-    DeleteReceiverData *dr = (DeleteReceiverData *)data;
-    if (!dr || !dr->rx) {
-        fprintf(stderr, "delete_receiver_idle_cb: invalid data or rx\n");
-        g_free(dr);
-        return FALSE;
+void delete_diversity_mixer(DIVMIXER *dmix) {
+  int hidden_channel;
+
+  for (int i = 0; i < MAX_DIVERSITY_MIXERS; i++) {
+    if(radio->divmixer[i] == dmix) {
+      g_print("delete div mixer %d\n", i);
+      radio->divmixer[i]->rx_visual->dmix_id = MAX_DIVERSITY_MIXERS+1;     
+      radio->divmixer[i]->rx_hidden->dmix_id = MAX_DIVERSITY_MIXERS+1; 
+      // Store the hidden channel before we delete the
+      // mixer
+      hidden_channel = radio->divmixer[i]->rx_hidden->channel;           
+      radio->divmixer[i]=NULL;
+      radio->diversity_mixers--;
+
+g_print("delete_diversity_mixer: dmixers now %d\n",radio->diversity_mixers);
+      break;
     }
-
-    delete_receiver(dr->rx);
-    g_free(dr);
-    return FALSE; // Run once
+  }
+  // Delete the hidden receiver
+  if (radio->receiver[hidden_channel] != NULL) {
+    g_print("delete_diversity_mixer: delete the hidden rx\n");
+    delete_receiver(radio->receiver[hidden_channel]);
+  }
 }
-
 
 static void rxtx(RADIO *r) {
   int i;
@@ -849,6 +814,7 @@ g_print("%s: isTransmitting=%d\n",__FUNCTION__,isTransmitting(r));
       }
     }
     SetChannelState(r->transmitter->channel,1,0);
+    if (r->transmitter->puresignal != NULL) SetPSMox(r->transmitter->channel, 1);
     switch(r->discovered->protocol) {
       case PROTOCOL_1:
         break;
@@ -864,6 +830,7 @@ g_print("%s: isTransmitting=%d\n",__FUNCTION__,isTransmitting(r));
     }
   } else {
     SetChannelState(r->transmitter->channel,0,1);
+    if (r->transmitter->puresignal != NULL) SetPSMox(r->transmitter->channel, 0);
     for(i=0;i<r->discovered->supported_receivers;i++) {
       if(r->receiver[i]!=NULL) {
         if(!r->receiver[i]->duplex) {
@@ -969,8 +936,12 @@ void set_tune(RADIO *r,gboolean state) {
     switch(r->transmitter->rx->mode_a) {
       case CWL:
       case CWU:
-        SetTXAMode(r->transmitter->channel, r->transmitter->rx->mode_a);
-        r->cw_keyer_internal=TRUE;
+        SetTXAMode(r->transmitter->channel, r->transmitter->rx->mode_a); 
+        #ifdef CWDAEMON
+        if (r->cw_generation_mode == CWGEN_RADIO) r->cw_keyer_internal=TRUE;
+        #else
+        r->cw_keyer_internal=TRUE;        
+        #endif
         break;
     }
     rxtx(r);
@@ -987,7 +958,7 @@ static void tune_cb(GtkToggleButton *widget,gpointer data) {
   }
 }
 
-int add_receiver(void *data) {
+int add_receiver(void *data, gboolean show_rx) {
   RADIO *r=(RADIO *)data;
   int i;
   for(i=0;i<r->discovered->supported_receivers;i++) {
@@ -997,7 +968,13 @@ int add_receiver(void *data) {
   }
   if(i<r->discovered->supported_receivers) {
 g_print("add_receiver: using receiver %d\n",i);
-    r->receiver[i]=create_receiver(i,r->sample_rate);
+    
+    if (!show_rx) {
+      g_print("add_receiver: no visuals %d\n",i);      
+      r->receiver[i]=create_receiver(i,r->sample_rate, FALSE);
+    } else {
+      r->receiver[i]=create_receiver(i,r->sample_rate, TRUE);
+    }
     r->receivers++;
 g_print("add_receiver: receivers now %d\n",r->receivers);
     switch(r->discovered->protocol) {
@@ -1024,15 +1001,46 @@ g_print("add_receiver: receivers now %d\n",r->receivers);
     }
   } else {
 g_print("add_receiver: no receivers available\n");
+    i = -1;
   }
 
-  gtk_widget_set_sensitive(add_receiver_b,r->receivers<r->discovered->supported_receivers);
+  if (radio->hl2 != NULL) {
+    if (radio->hl2->xvtr == FALSE) {
+      gtk_widget_set_sensitive(add_receiver_b,r->receivers<r->discovered->supported_receivers);
+    }
+  }
 
   if(radio->dialog) {
     gtk_widget_destroy(radio->dialog);
     radio->dialog=NULL;
   }
-  return 0;
+  return i;
+}
+
+int add_diversity_mixer(void *data, RECEIVER *rx_visual, RECEIVER *rx_hidden) { 
+  RADIO *r=(RADIO *)data;
+  int i = 0;
+  
+  for (i = 0; i < MAX_DIVERSITY_MIXERS; i++) {
+    if(r->divmixer[i]==NULL) {
+      break;
+    }
+  }
+  
+  if (i < MAX_DIVERSITY_MIXERS) {
+  
+g_print("add_diversity_mixer: using diversity mixer %d\n",i);  
+  
+    r->divmixer[i] = create_diversity_mixer(i, rx_visual, rx_hidden);
+    rx_visual->dmix_id = i;
+    rx_hidden->dmix_id = i;
+    radio->diversity_mixers++;
+  } else {
+g_print("add_diversity_mixer: no diversity mixers available\n");
+    i = -1;
+  }
+  
+  return i;  
 }
 
 void add_receivers(RADIO *r) {
@@ -1047,7 +1055,7 @@ void add_receivers(RADIO *r) {
 
   // always add receiver 0
   if(receivers==0) {
-    r->receiver[0]=create_receiver(0,r->sample_rate);
+    r->receiver[0]=create_receiver(0,r->sample_rate, TRUE);
     r->receivers++;
     switch(r->discovered->protocol) {
       case PROTOCOL_2:
@@ -1066,7 +1074,7 @@ void add_receivers(RADIO *r) {
       sprintf(name,"receiver[%d].channel",i);
       value=getProperty(name);
       if(value!=NULL) {
-        r->receiver[i]=create_receiver(i,r->sample_rate);
+        r->receiver[i]=create_receiver(i,r->sample_rate, TRUE);
         r->receivers++;
         switch(r->discovered->protocol) {
           case PROTOCOL_2:
@@ -1113,6 +1121,10 @@ void add_transmitter(RADIO *r) {
 int add_wideband(void *data) {
   RADIO *r=(RADIO *)data;
   r->wideband=create_wideband(WIDEBAND_CHANNEL);
+  
+  protocol1_stop();  
+  protocol1_run();
+  
   if(r->discovered->protocol==PROTOCOL_2) {
     protocol2_start_wideband(r->wideband);
   }
@@ -1125,7 +1137,7 @@ int add_wideband(void *data) {
 
 static gboolean add_receiver_cb(GtkWidget *widget,gpointer data) {
   RADIO *r=(RADIO *)data;
-  add_receiver(r);
+  add_receiver(r, TRUE);
   return TRUE;
 }
 
@@ -1146,183 +1158,104 @@ static gboolean configure_cb(GtkWidget *widget,gpointer data) {
   return TRUE;
 }
 
-// Callbacks for sliders
-static void mic_level_value_changed_cb(GtkRange *range, gpointer data) {
-    RADIO *r = (RADIO *)data;
-    r->vox_threshold = gtk_range_get_value(range); // Update VOX threshold (0.0 to 1.0)
-    // Call setter if it exists (uncomment if defined in your codebase)
-    // transmitter_set_mic_level(r->transmitter, r->vox_threshold);
-    vox_changed(r); // Notify VOX change
-    update_tx_panadapter(r); // Refresh panadapter
-}
-
-static void mic_gain_value_changed_cb(GtkRange *range, gpointer data) {
-    RADIO *r = (RADIO *)data;
-    TRANSMITTER *tx = r->transmitter;
-    tx->mic_gain = gtk_range_get_value(range); // Update mic gain (dB)
-    if(tx->mic_gain<-10.0) tx->mic_gain=-10.0;
-    if(tx->mic_gain>50.0) tx->mic_gain=50.0;
-    SetTXAPanelGain1(tx->channel,pow(10.0, tx->mic_gain / 20.0));
-    update_tx_panadapter(r); // Refresh panadapter
-}
-
-static void drive_value_changed_cb(GtkRange *range, gpointer data) {
-    RADIO *r = (RADIO *)data;
-    TRANSMITTER *tx = r->transmitter;
-    tx->drive = gtk_range_get_value(range); // Update drive (0-100)
-    // Call setter if it exists (uncomment if defined in your codebase)
-    // transmitter_set_drive(tx, tx->drive);
-    update_tx_panadapter(r); // Refresh panadapter
-}
-
 static void create_visual(RADIO *r) {
-    r->visual = gtk_grid_new();
-    gtk_grid_set_row_homogeneous(GTK_GRID(r->visual), TRUE);
-    gtk_grid_set_column_homogeneous(GTK_GRID(r->visual), FALSE);
-    gtk_grid_set_row_spacing(GTK_GRID(r->visual), 5);
-    gtk_grid_set_column_spacing(GTK_GRID(r->visual), 5);
+  r->visual=gtk_grid_new();
+  gtk_grid_set_row_homogeneous(GTK_GRID(r->visual),TRUE);
+  gtk_grid_set_column_homogeneous(GTK_GRID(r->visual),FALSE);
+  gtk_grid_set_row_spacing(GTK_GRID(r->visual),5);
+  gtk_grid_set_column_spacing(GTK_GRID(r->visual),5);
 
-    int row = 0;
-    int col = 0;
 
-    if (r->can_transmit) {
-        gtk_grid_attach(GTK_GRID(r->visual), r->transmitter->panadapter, col, row, 1, 5);
-        col++;
-        row = 0;
+  int row=0;
+  int col=0;
 
-        r->mox_button = gtk_toggle_button_new_with_label("MOX");
-        gtk_widget_set_name(r->mox_button, "transmit-warning");
-        g_signal_connect(r->mox_button, "toggled", G_CALLBACK(mox_cb), (gpointer)r);
-        gtk_grid_attach(GTK_GRID(r->visual), r->mox_button, col, row, 1, 1);
-        row++;
+  if(r->can_transmit) {
+    gtk_grid_attach(GTK_GRID(r->visual),r->transmitter->panadapter,col,row,1,5);
+    col++;
+    row=0;
 
-        r->vox_button = gtk_toggle_button_new_with_label("VOX");
-        gtk_widget_set_name(r->vox_button, "transmit-warning");
-        g_signal_connect(r->vox_button, "toggled", G_CALLBACK(vox_cb), (gpointer)r);
-        gtk_grid_attach(GTK_GRID(r->visual), r->vox_button, col, row, 1, 1);
-        row++;
+    r->mox_button=gtk_toggle_button_new_with_label("MOX");
+    gtk_widget_set_name(r->mox_button,"transmit-warning");
+    //gtk_style_context_add_class(gtk_widget_get_style_context(GTK_WIDGET(r->mox_button)),"circular");
+    g_signal_connect(r->mox_button,"toggled",G_CALLBACK(mox_cb),(gpointer)r);
+    gtk_grid_attach(GTK_GRID(r->visual),r->mox_button,col,row,1,1);
+    row++;
 
-        // Mic Level Slider with Mic Meter Underlay
-GtkWidget *mic_level_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 5);
-GtkWidget *mic_level_label = gtk_label_new("Mic Level:");
-gtk_widget_set_name(mic_level_label, "slider-label");
-gtk_box_pack_start(GTK_BOX(mic_level_box), mic_level_label, FALSE, FALSE, 5);
+    r->vox_button=gtk_toggle_button_new_with_label("VOX");
+    gtk_widget_set_name(r->vox_button,"transmit-warning");
+    //gtk_style_context_add_class(gtk_widget_get_style_context(GTK_WIDGET(r->vox_button)),"circular");
+    g_signal_connect(r->vox_button,"toggled",G_CALLBACK(vox_cb),(gpointer)r);
+    gtk_grid_attach(GTK_GRID(r->visual),r->vox_button,col,row,1,1);
+    row++;
 
-// Create overlay container
-GtkWidget *overlay = gtk_overlay_new();
-gtk_widget_set_name(overlay, "mic-overlay");
-gtk_widget_set_size_request(overlay, 220, 24);  // Unified height
-gtk_widget_set_halign(overlay, GTK_ALIGN_FILL);
-gtk_widget_set_valign(overlay, GTK_ALIGN_CENTER);
-gtk_widget_set_margin_top(overlay, 2);
-gtk_widget_set_margin_bottom(overlay, 2);
+    r->mic_level=create_mic_level(radio->transmitter);
+    gtk_grid_attach(GTK_GRID(r->visual),r->mic_level,col,row,3,1);
+    row++;
+  
+    r->mic_gain=create_mic_gain(radio->transmitter);
+    gtk_grid_attach(GTK_GRID(r->visual),r->mic_gain,col,row,3,1);
+    row++;
 
-// Mic Meter (Progress Bar)
-r->mic_meter = gtk_progress_bar_new();
-gtk_widget_set_name(r->mic_meter, "mic-meter");
-gtk_progress_bar_set_fraction(GTK_PROGRESS_BAR(r->mic_meter), 0.0);
-gtk_widget_set_size_request(r->mic_meter, 204, 10);
-gtk_widget_set_halign(r->mic_meter, GTK_ALIGN_FILL);
-gtk_widget_set_valign(r->mic_meter, GTK_ALIGN_CENTER);
-gtk_container_add(GTK_CONTAINER(overlay), r->mic_meter);
-
-// Apply fallback class for yellow styling
-GtkStyleContext *context = gtk_widget_get_style_context(r->mic_meter);
-gtk_style_context_add_class(context, "yellow-progress");
-
-// Mic Level Slider (Overlaid)
-r->mic_level = gtk_scale_new_with_range(GTK_ORIENTATION_HORIZONTAL, 0.0, 1.0, 0.01);
-gtk_widget_set_name(r->mic_level, "modern-slider");
-gtk_scale_set_draw_value(GTK_SCALE(r->mic_level), FALSE);  // Cleaner look
-gtk_widget_set_size_request(r->mic_level, 204, 10);
-gtk_widget_set_halign(r->mic_level, GTK_ALIGN_FILL);
-gtk_widget_set_valign(r->mic_level, GTK_ALIGN_CENTER);
-gtk_widget_set_opacity(r->mic_level, 0.6);
-gtk_range_set_value(GTK_RANGE(r->mic_level), r->vox_threshold);
-g_signal_connect(r->mic_level, "value-changed", G_CALLBACK(mic_level_value_changed_cb), (gpointer)r);
-
-gtk_overlay_add_overlay(GTK_OVERLAY(overlay), r->mic_level);
-
-// Attach overlay to box and grid
-gtk_box_pack_start(GTK_BOX(mic_level_box), overlay, TRUE, TRUE, 5);
-gtk_grid_attach(GTK_GRID(r->visual), mic_level_box, col, row, 3, 1);
-row++;
-
-     // Mic Gain Slider
-        GtkWidget *mic_gain_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 5);
-        GtkWidget *mic_gain_label = gtk_label_new("Mic Gain (dB): ");
-        gtk_widget_set_name(mic_gain_label, "slider-label");
-        gtk_box_pack_start(GTK_BOX(mic_gain_box), mic_gain_label, FALSE, FALSE, 5);
-
-        r->mic_gain = gtk_scale_new_with_range(GTK_ORIENTATION_HORIZONTAL, -10.0, 50.0, 0.1);
-        gtk_widget_set_name(r->mic_gain, "modern-slider");
-        gtk_scale_set_draw_value(GTK_SCALE(r->mic_gain), TRUE);
-        gtk_scale_set_value_pos(GTK_SCALE(r->mic_gain), GTK_POS_TOP);
-        gtk_range_set_value(GTK_RANGE(r->mic_gain), r->transmitter->mic_gain);
-        gtk_widget_set_size_request(r->mic_gain, 200, -1);
-        g_signal_connect(r->mic_gain, "value-changed", G_CALLBACK(mic_gain_value_changed_cb), (gpointer)r);
-        gtk_box_pack_start(GTK_BOX(mic_gain_box), r->mic_gain, TRUE, TRUE, 5);
-        gtk_grid_attach(GTK_GRID(r->visual), mic_gain_box, col, row, 3, 1);
-        row++;
-
-        // Drive Level Slider
-        GtkWidget *drive_level_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 5);
-        GtkWidget *drive_level_label = gtk_label_new("Drive (%): ");
-        gtk_widget_set_name(drive_level_label, "slider-label");
-        gtk_box_pack_start(GTK_BOX(drive_level_box), drive_level_label, FALSE, FALSE, 5);
-
-        r->drive_level = gtk_scale_new_with_range(GTK_ORIENTATION_HORIZONTAL, 0.0, 100.0, 1.0);
-        gtk_widget_set_name(r->drive_level, "modern-slider");
-        gtk_scale_set_draw_value(GTK_SCALE(r->drive_level), TRUE);
-        gtk_scale_set_value_pos(GTK_SCALE(r->drive_level), GTK_POS_TOP);
-        gtk_range_set_value(GTK_RANGE(r->drive_level), r->transmitter->drive);
-        gtk_widget_set_size_request(r->drive_level, 200, -1);
-        g_signal_connect(r->drive_level, "value-changed", G_CALLBACK(drive_value_changed_cb), (gpointer)r);
-        gtk_box_pack_start(GTK_BOX(drive_level_box), r->drive_level, TRUE, TRUE, 5);
-        gtk_grid_attach(GTK_GRID(r->visual), drive_level_box, col, row, 3, 1);
-
-        col++;
-        row = 0;
-
-        r->tune_button = gtk_toggle_button_new_with_label("Tune");
-        gtk_widget_set_name(r->tune_button, "transmit-warning");
-        g_signal_connect(r->tune_button, "toggled", G_CALLBACK(tune_cb), (gpointer)r);
-        gtk_grid_attach(GTK_GRID(r->visual), r->tune_button, col, row, 1, 1);
-        row++;
-    }
-
-    GtkWidget *configure = gtk_button_new_with_label("Configure");
-    gtk_widget_set_name(configure, "vfo-button");
-    g_signal_connect(configure, "clicked", G_CALLBACK(configure_cb), (gpointer)r);
-    gtk_grid_attach(GTK_GRID(r->visual), configure, col, row, 1, 1);
+    r->drive_level=create_drive_level(radio->transmitter);
+    gtk_grid_attach(GTK_GRID(r->visual),r->drive_level,col,row,3,1);
 
     col++;
-    row = 0;
+    row=0;
+  
+    r->tune_button=gtk_toggle_button_new_with_label("Tune");
+    gtk_widget_set_name(r->tune_button,"transmit-warning");
+    //gtk_style_context_add_class(gtk_widget_get_style_context(GTK_WIDGET(r->tune_button)),"circular");
+    g_signal_connect(r->tune_button,"toggled",G_CALLBACK(tune_cb),(gpointer)r);
+    gtk_grid_attach(GTK_GRID(r->visual),r->tune_button,col,row,1,1);
+    row++;
 
-    if (r->discovered->supported_receivers > 1) {
-        add_receiver_b = gtk_button_new_with_label("Add Receiver");
-        gtk_widget_set_name(add_receiver_b, "vfo-button");
-        g_signal_connect(add_receiver_b, "clicked", G_CALLBACK(add_receiver_cb), (gpointer)r);
-        gtk_grid_attach(GTK_GRID(r->visual), add_receiver_b, col, row, 1, 1);
-        gtk_widget_set_sensitive(add_receiver_b, r->receivers < r->discovered->supported_receivers);
-        row++;
+  }
+
+  GtkWidget *configure=gtk_button_new_with_label("Configure");
+  gtk_widget_set_name(configure,"vfo-button");
+  //gtk_style_context_add_class(gtk_widget_get_style_context(GTK_WIDGET(configure)),"circular");
+  g_signal_connect(configure,"clicked",G_CALLBACK(configure_cb),(gpointer)r);
+  gtk_grid_attach(GTK_GRID(r->visual),configure,col,row,1,1);
+
+  col++;
+  row=0;
+
+  if(r->discovered->supported_receivers>1) {
+    add_receiver_b=gtk_button_new_with_label("Add Receiver");
+    gtk_widget_set_name(add_receiver_b,"vfo-button");
+    //gtk_style_context_add_class(gtk_widget_get_style_context(GTK_WIDGET(add_receiver_b)),"circular");
+    g_signal_connect(add_receiver_b,"clicked",G_CALLBACK(add_receiver_cb),(gpointer)r);
+    gtk_grid_attach(GTK_GRID(r->visual),add_receiver_b,col,row,1,1);
+
+    if (radio->hl2 != NULL) {
+      if (radio->hl2->xvtr == FALSE) {      
+        gtk_widget_set_sensitive(add_receiver_b,r->receivers<r->discovered->supported_receivers);
+      }
+      else {
+        gtk_widget_set_sensitive(add_receiver_b, FALSE);        
+      }
     }
+    row++;
+  }
 
 #ifdef SOAPYSDR
-    if (r->discovered->protocol != PROTOCOL_SOAPYSDR) {
+  if(r->discovered->protocol!=PROTOCOL_SOAPYSDR) {
 #endif
-        add_wideband_b = gtk_button_new_with_label("Add Wideband");
-        gtk_widget_set_name(add_wideband_b, "vfo-button");
-        g_signal_connect(add_wideband_b, "clicked", G_CALLBACK(add_wideband_cb), (gpointer)r);
-        gtk_grid_attach(GTK_GRID(r->visual), add_wideband_b, col, row, 1, 1);
-        col++;
+    add_wideband_b=gtk_button_new_with_label("Add Wideband");
+    gtk_widget_set_name(add_wideband_b,"vfo-button");
+    //gtk_style_context_add_class(gtk_widget_get_style_context(GTK_WIDGET(add_wideband_b)),"circular");
+    g_signal_connect(add_wideband_b,"clicked",G_CALLBACK(add_wideband_cb),(gpointer)r);
+    gtk_grid_attach(GTK_GRID(r->visual),add_wideband_b,col,row,1,1);
+    col++;
 #ifdef SOAPYSDR
-    }
+  }
 #endif
 
-    row = 0;
+  col++;
+  row=0;
 
-    gtk_widget_show_all(r->visual);
+  gtk_widget_show_all(r->visual);
+  
 }
 
 RADIO *create_radio(DISCOVERED *d) {
@@ -1395,9 +1328,6 @@ g_print("create_radio for %s %d\n",d->name,d->device);
       r->alex_tx_antenna=0; // ANT 1
       break;
   }
-
-  r->penelope=FALSE;
-
   r->receivers=0;
   switch(d->device) {
 #ifdef SOAPYSDR
@@ -1417,6 +1347,12 @@ g_print("create_radio for %s %d\n",d->name,d->device);
   }
   r->active_receiver=NULL;
   r->transmitter=NULL;
+  
+  r->diversity_mixers = 0;
+  for(i=0;i< r->diversity_mixers; i++) {
+    r->divmixer[i] = NULL;
+  }  
+  r->divmixer[MAX_DIVERSITY_MIXERS+1] = NULL;
 
   r->can_transmit=TRUE;
 #ifdef SOAPYSDR
@@ -1446,14 +1382,17 @@ g_print("create_radio for %s %d\n",d->name,d->device);
   r->cw_keyer_ptt_delay=20;
   r->cw_keyer_hang_time=300;
   r->cw_keys_reversed=FALSE;
-  r->cw_keys_reversed=FALSE;
   r->cw_breakin=FALSE;
   
+  r->protocol1_timer = 0;
+  r->hang_time_ctr = 0;
   r->cwdaemon=FALSE;
   
   #ifdef CWDAEMON
+  r->cw_generation_mode = CWGEN_RADIO;  
   r->cwdaemon_running=FALSE;
   r->cwd_port = 51000;
+  r->cwd_sidetone = FALSE;
   #endif
   
   r->display_filled=TRUE;
@@ -1475,14 +1414,16 @@ g_print("create_radio for %s %d\n",d->name,d->device);
   g_mutex_init(&r->local_microphone_mutex);
 
   g_mutex_init(&r->ring_buffer_mutex);
+  
+  g_mutex_init(&r->delete_rx_mutex);
+  
   g_cond_init(&r->ring_buffer_cond);
 
   r->filter_board=ALEX;
+    
+  r->oc_tx_signal_id = g_new0(gulong, BANDS * 8);
+  r->oc_rx_signal_id = g_new0(gulong, BANDS * 8);  
   
-  // Hermes lite 2
-  r->enable_pa = TRUE;
-  r->psu_clk = TRUE;
-
   r->adc[0].id=0;
   r->adc[0].antenna=ANTENNA_1;
   r->adc[0].filters=AUTOMATIC;
@@ -1547,17 +1488,33 @@ g_print("create_radio for %s %d\n",d->name,d->device);
   r->which_audio_backend=0;
 
   r->swr_alarm_value = 2.0;
-  r->temperature_alarm_value = 42;  
+  r->temperature_alarm_value = 50;  
+  r->qos_flag = FALSE;
+  
   r->midi_enabled = FALSE;
- 
-  r->frequency_calibration_offset = 0;
+  sprintf(r->midi_filename,"%s/.local/share/linhpsdr/midi.props", g_get_home_dir());
   
   r->dialog=NULL;
 
-
+  if (radio->discovered->device==DEVICE_HERMES_LITE2) {
+    r->hl2 = create_hl2();
+  }
+ 
   radio_restore_state(r);
 
+  if (radio->hl2 != NULL) hl2_init(r->hl2);
+
   radio_change_region(r);
+
+#ifdef CWDAEMON
+  radio_change_cwgeneration(r);
+  // Check if cwdaemon was running when linhpsdr was last closed cleanly (and
+  // thus wrote this to the props file)
+  if (r->cwdaemon_running) {
+    r->cwdaemon_running = FALSE;
+    r->cwdaemon = cwdaemon_start();
+  }
+#endif
 
 #ifdef SOAPYSDR
   if(r->discovered->protocol==PROTOCOL_SOAPYSDR) {
@@ -1566,7 +1523,6 @@ g_print("create_radio for %s %d\n",d->name,d->device);
 #endif
 
   create_audio(r->which_audio_backend,r->which_audio==USE_SOUNDIO?audio_get_backend_name(r->which_audio_backend):NULL);
-  g_timeout_add(100, update_mic_meter, (gpointer)r);
 
   add_receivers(r);
 

@@ -26,9 +26,6 @@
 #include <string.h>
 #include <termios.h>
 #include <wdsp.h>
-#include <sched.h>
-
-
 
 #include "agc.h"
 #include "mode.h"
@@ -62,465 +59,649 @@
 #include "rigctl.h"
 #include "subrx.h"
 
-// Metadata for savable fields
-typedef enum {
-    TYPE_INT,
-    TYPE_LONG,
-    TYPE_INT64,
-    TYPE_DOUBLE,
-    TYPE_STRING
-} FieldType;
-
-typedef struct {
-    const char *name;   // Property name (without receiver[channel] prefix)
-    FieldType type;     // Data type
-    size_t offset;      // Offset in RECEIVER struct
-    int conditional;    // 0 = always save, 1 = conditional (e.g., waterfall_low)
-} FieldDescriptor;
-
-#define OFFSET(field) offsetof(RECEIVER, field)
-
-// Metadata table for RECEIVER fields
-static const FieldDescriptor receiver_fields[] = {
-    {"adc", TYPE_INT, OFFSET(adc), 0},
-    {"sample_rate", TYPE_INT, OFFSET(sample_rate), 0},
-    {"dsp_rate", TYPE_INT, OFFSET(dsp_rate), 0},
-    {"output_rate", TYPE_INT, OFFSET(output_rate), 0},
-    {"buffer_size", TYPE_INT, OFFSET(buffer_size), 0},
-    {"fft_size", TYPE_INT, OFFSET(fft_size), 0},
-    {"low_latency", TYPE_INT, OFFSET(low_latency), 0},
-    {"fps", TYPE_INT, OFFSET(fps), 0},
-    {"display_average_time", TYPE_DOUBLE, OFFSET(display_average_time), 0},
-    {"panadapter_low", TYPE_INT, OFFSET(panadapter_low), 0},
-    {"panadapter_high", TYPE_INT, OFFSET(panadapter_high), 0},
-    {"panadapter_step", TYPE_INT, OFFSET(panadapter_step), 0},
-    {"panadapter_filled", TYPE_INT, OFFSET(panadapter_filled), 0},
-    {"panadapter_gradient", TYPE_INT, OFFSET(panadapter_gradient), 0},
-    {"panadapter_agc_line", TYPE_INT, OFFSET(panadapter_agc_line), 0},
-    {"waterfall_low", TYPE_INT, OFFSET(waterfall_low), 1}, // Conditional
-    {"waterfall_high", TYPE_INT, OFFSET(waterfall_high), 1}, // Conditional
-    {"waterfall_automatic", TYPE_INT, OFFSET(waterfall_automatic), 0},
-    {"waterfall_ft8_marker", TYPE_INT, OFFSET(waterfall_ft8_marker), 0},
-    {"frequency_a", TYPE_INT64, OFFSET(frequency_a), 0},
-    {"lo_a", TYPE_INT64, OFFSET(lo_a), 0},
-    {"error_a", TYPE_INT64, OFFSET(error_a), 0},
-    {"lo_tx", TYPE_INT64, OFFSET(lo_tx), 0},
-    {"error_tx", TYPE_INT64, OFFSET(error_tx), 0},
-    {"tx_track_rx", TYPE_INT, OFFSET(tx_track_rx), 0},
-    {"band_a", TYPE_INT, OFFSET(band_a), 0},
-    {"mode_a", TYPE_INT, OFFSET(mode_a), 0},
-    {"filter_a", TYPE_INT, OFFSET(filter_a), 0},
-    {"filter_low_a", TYPE_INT, OFFSET(filter_low_a), 0},
-    {"filter_high_a", TYPE_INT, OFFSET(filter_high_a), 0},
-    {"frequency_b", TYPE_INT64, OFFSET(frequency_b), 0},
-    {"lo_b", TYPE_INT64, OFFSET(lo_b), 0},
-    {"error_b", TYPE_INT64, OFFSET(error_b), 0},
-#ifdef USE_VFO_B_MODE_AND_FILTER
-    {"band_b", TYPE_INT, OFFSET(band_b), 0},
-    {"mode_b", TYPE_INT, OFFSET(mode_b), 0},
-    {"filter_b", TYPE_INT, OFFSET(filter_b), 0},
-    {"filter_low_b", TYPE_INT, OFFSET(filter_low_b), 0},
-    {"filter_high_b", TYPE_INT, OFFSET(filter_high_b), 0},
-#endif
-    {"ctun", TYPE_INT, OFFSET(ctun), 0},
-    {"ctun_offset", TYPE_LONG, OFFSET(ctun_offset), 0},
-    {"ctun_frequency", TYPE_LONG, OFFSET(ctun_frequency), 0},
-    {"ctun_min", TYPE_LONG, OFFSET(ctun_min), 0},
-    {"ctun_max", TYPE_LONG, OFFSET(ctun_max), 0},
-    {"qo100_beacon", TYPE_INT, OFFSET(qo100_beacon), 0},
-    {"split", TYPE_INT, OFFSET(split), 0},
-    {"offset", TYPE_LONG, OFFSET(offset), 0},
-    {"bandstack", TYPE_INT, OFFSET(bandstack), 0},
-    {"remote_audio", TYPE_INT, OFFSET(remote_audio), 0},
-    {"local_audio", TYPE_INT, OFFSET(local_audio), 0},
-    {"output_index", TYPE_INT, OFFSET(output_index), 0},
-    {"mute_when_not_active", TYPE_INT, OFFSET(mute_when_not_active), 0},
-    {"local_audio_buffer_size", TYPE_INT, OFFSET(local_audio_buffer_size), 0},
-    {"local_audio_latency", TYPE_INT, OFFSET(local_audio_latency), 0},
-    {"audio_channels", TYPE_INT, OFFSET(audio_channels), 0},
-    {"step", TYPE_LONG, OFFSET(step), 0},
-    {"zoom", TYPE_INT, OFFSET(zoom), 0},
-    {"pan", TYPE_INT, OFFSET(pan), 0},
-    {"agc", TYPE_INT, OFFSET(agc), 0},
-    {"agc_gain", TYPE_DOUBLE, OFFSET(agc_gain), 0},
-    {"agc_slope", TYPE_DOUBLE, OFFSET(agc_slope), 0},
-    {"agc_hang_threshold", TYPE_DOUBLE, OFFSET(agc_hang_threshold), 0},
-    {"enable_equalizer", TYPE_INT, OFFSET(enable_equalizer), 0},
-    {"volume", TYPE_DOUBLE, OFFSET(volume), 0},
-    {"nr", TYPE_INT, OFFSET(nr), 0},
-    {"nr2", TYPE_INT, OFFSET(nr2), 0},
-    {"nr2_gain_method", TYPE_INT, offsetof(RECEIVER, nr2_gain_method), 0},
-    {"nr2_npe_method", TYPE_INT, offsetof(RECEIVER, nr2_npe_method), 0},
-    {"nb", TYPE_INT, OFFSET(nb), 0},
-    {"nb2", TYPE_INT, OFFSET(nb2), 0},
-    {"anf", TYPE_INT, OFFSET(anf), 0},
-    {"snb", TYPE_INT, OFFSET(snb), 0},
-    {"rit_enabled", TYPE_INT, OFFSET(rit_enabled), 0},
-    {"rit", TYPE_LONG, OFFSET(rit), 0},
-    {"rit_step", TYPE_LONG, OFFSET(rit_step), 0},
-    {"bpsk_enable", TYPE_INT, OFFSET(bpsk_enable), 0},
-    {"duplex", TYPE_INT, OFFSET(duplex), 0},
-    {"mute_while_transmitting", TYPE_INT, OFFSET(mute_while_transmitting), 0},
-    {"rigctl_port", TYPE_INT, OFFSET(rigctl_port), 0},
-    {"rigctl_enable", TYPE_INT, OFFSET(rigctl_enable), 0},
-    {"rigctl_serial_enable", TYPE_INT, OFFSET(rigctl_serial_enable), 0},
-    {"rigctl_debug", TYPE_INT, OFFSET(rigctl_debug), 0},
-    {"paned_position", TYPE_INT, OFFSET(paned_position), 0},
-    {"paned_percent", TYPE_DOUBLE, OFFSET(paned_percent), 0},
-    // New fields from noise_menu.c
-    {"nr2_trained_threshold", TYPE_DOUBLE, OFFSET(nr2_trained_threshold), 0},
-    {"nr2_trained_t2", TYPE_DOUBLE, OFFSET(nr2_trained_t2), 0},
-    {"nb2_mode", TYPE_INT, OFFSET(nb2_mode), 0},
-    {"nb_tau", TYPE_DOUBLE, OFFSET(nb_tau), 0},
-    {"nb_advtime", TYPE_DOUBLE, OFFSET(nb_advtime), 0},
-    {"nb_hang", TYPE_DOUBLE, OFFSET(nb_hang), 0},
-    {"nb_thresh", TYPE_DOUBLE, OFFSET(nb_thresh), 0},
-    {NULL, 0, 0, 0} // Sentinel
-};
-
-// Forward declaration for full_rx_buffer
-static void full_rx_buffer(RECEIVER *rx);
-
-static gpointer render_processing_thread(gpointer data);
-
-static gboolean update_display_cb(gpointer data) {
-    RECEIVER *rx = (RECEIVER *)data;
-    ReceiverThreadContext *ctx = &rx->thread_context;
-
-    g_mutex_lock(&ctx->render_mutex);
-
-    // If widgets are already destroyed, bail early
-    if (!GTK_IS_WIDGET(rx->panadapter) || !GTK_IS_WIDGET(rx->waterfall)) {
-        g_mutex_unlock(&ctx->render_mutex);
-        return FALSE;
-    }
-
-    gboolean protocol_running = FALSE;
-    switch (radio->discovered->protocol) {
-        case PROTOCOL_1:
-            protocol_running = protocol1_is_running();
-            break;
-        case PROTOCOL_2:
-            protocol_running = protocol2_is_running();
-            break;
-#ifdef SOAPYSDR
-        case PROTOCOL_SOAPYSDR:
-            protocol_running = soapy_protocol_is_running();
-            break;
-#endif
-    }
-
-    update_rx_panadapter(rx, protocol_running);
-    update_waterfall(rx);
-
-    gtk_widget_queue_draw(rx->panadapter);
-    gtk_widget_queue_draw(rx->waterfall);
-
-    g_mutex_unlock(&ctx->render_mutex);
-    return FALSE; // Run once
-}
-
-
-static gpointer render_processing_thread(gpointer data) {
-    RECEIVER *rx = (RECEIVER *)data;
-    ReceiverThreadContext *ctx = &rx->thread_context;
-    while (ctx->running) {
-        gpointer queue_data = g_async_queue_pop(ctx->render_queue);
-        if (GPOINTER_TO_INT(queue_data) == -1) break;
-
-        g_mutex_lock(&ctx->render_mutex);
-        //gboolean protocol_running = FALSE;
-        // Preprocess data (e.g., update rx->pixel_samples)
-        // Schedule GTK update in main thread
-        g_idle_add((GSourceFunc)update_display_cb, rx);
-        g_mutex_unlock(&ctx->render_mutex);
-    }
-    return NULL;
-}
-
-
-static void focus_in_event_cb(GtkWindow *window, GdkEventFocus *event, gpointer data) {
-    if (event->in) {
-        radio->active_receiver = (RECEIVER *)data;
-    }
-}
-
-static gpointer wdsp_processing_thread(gpointer data) {
-    RECEIVER *rx = (RECEIVER *)data;
-    ReceiverThreadContext *ctx = &rx->thread_context;
-    struct sched_param param;
-    param.sched_priority = sched_get_priority_max(SCHED_FIFO);
-    pthread_setschedparam(pthread_self(), SCHED_FIFO, &param);
-
-    fprintf(stderr, "WDSP thread started: channel=%d\n", rx->channel);
-
-    while (ctx->running) {
-        gpointer queue_data = g_async_queue_pop(ctx->iq_queue);
-        if (GPOINTER_TO_INT(queue_data) == -1) {
-            fprintf(stderr, "WDSP thread exiting (channel=%d)\n", rx->channel);
-            break;
-        }
-
-        int required = rx->buffer_size * 2; // I + Q
-
-        if (rx->iq_ring_buffer.count < required) {
-
-            // Retry later
-            g_async_queue_push(ctx->iq_queue, GINT_TO_POINTER(1));
-            continue;
-        }
-
-
-        full_rx_buffer(rx);
-    }
-
-    fprintf(stderr, "WDSP thread (channel=%d): exiting\n", rx->channel);
-    return NULL;
-}
-
 void receiver_save_state(RECEIVER *rx) {
-    char name[128];
-    char value[128];
-    int i;
-    gint x, y, width, height;
+  if (rx->show_rx == FALSE) return;
+  char name[80];
+  char value[80];
+  int i;
+  gint x;
+  gint y;
+  gint width;
+  gint height;
 
-    if (!rx) {
-        fprintf(stderr, "receiver_save_state: Error: rx is NULL\n");
-        return;
-    }
-    fprintf(stderr, "receiver_save_state: rx=%p, channel=%d\n", rx, rx->channel);
+  sprintf(name,"receiver[%d].channel",rx->channel);
+  sprintf(value,"%d",rx->channel);
+  setProperty(name,value);
+  sprintf(name,"receiver[%d].adc",rx->channel);
+  sprintf(value,"%d",rx->adc);
+  setProperty(name,value);
+  sprintf(name,"receiver[%d].sample_rate",rx->channel);
+  sprintf(value,"%d",rx->sample_rate);
+  setProperty(name,value);
+  sprintf(name,"receiver[%d].dsp_rate",rx->channel);
+  sprintf(value,"%d",rx->dsp_rate);
+  setProperty(name,value);
+  sprintf(name,"receiver[%d].output_rate",rx->channel);
+  sprintf(value,"%d",rx->output_rate);
+  setProperty(name,value);
+  sprintf(name,"receiver[%d].buffer_size",rx->channel);
+  sprintf(value,"%d",rx->buffer_size);
+  setProperty(name,value);
+  sprintf(name,"receiver[%d].fft_size",rx->channel);
+  sprintf(value,"%d",rx->fft_size);
+  setProperty(name,value);
+  sprintf(name,"receiver[%d].low_latency",rx->channel);
+  sprintf(value,"%d",rx->low_latency);
+  setProperty(name,value);
+  sprintf(name,"receiver[%d].low_latency",rx->channel);
+  sprintf(value,"%d",rx->low_latency);
+  setProperty(name,value);
+  sprintf(name,"receiver[%d].fps",rx->channel);
+  sprintf(value,"%d",rx->fps);
+  setProperty(name,value);
 
-    // Save channel
-    sprintf(name, "receiver[%d].channel", rx->channel);
-    sprintf(value, "%d", rx->channel);
-    fprintf(stderr, "Saving: %s = %s\n", name, value);
-    setProperty(name, value);
+  sprintf(name,"receiver[%d].display_average_time",rx->channel);
+  sprintf(value,"%f",rx->display_average_time);
+  setProperty(name,value);  
+  sprintf(name,"receiver[%d].panadapter_low",rx->channel);
+  sprintf(value,"%d",rx->panadapter_low);
+  setProperty(name,value);  
+  sprintf(name,"receiver[%d].panadapter_high",rx->channel);
+  sprintf(value,"%d",rx->panadapter_high);
+  setProperty(name,value);
+  sprintf(name,"receiver[%d].panadapter_step",rx->channel);
+  sprintf(value,"%d",rx->panadapter_step);
+  setProperty(name,value);
+  sprintf(name,"receiver[%d].panadapter_filled",rx->channel);
+  sprintf(value,"%d",rx->panadapter_filled);
+  setProperty(name,value);
+  sprintf(name,"receiver[%d].panadapter_gradient",rx->channel);
+  sprintf(value,"%d",rx->panadapter_gradient);
+  setProperty(name,value);
+  sprintf(name,"receiver[%d].panadapter_agc_line",rx->channel);
+  sprintf(value,"%d",rx->panadapter_agc_line);
+  setProperty(name,value);
 
-    // Generic save loop
-    for (const FieldDescriptor *field = receiver_fields; field->name; field++) {
-        if (field->conditional) {
-            if (strcmp(field->name, "waterfall_low") == 0 || strcmp(field->name, "waterfall_high") == 0) {
-                if (rx->waterfall_automatic) continue;
-            }
-        }
+  if(rx->waterfall_automatic == FALSE) {
+      sprintf(name,"receiver[%d].waterfall_low",rx->channel);
+      sprintf(value,"%d",rx->waterfall_low);
+      setProperty(name,value);  
+      sprintf(name,"receiver[%d].waterfall_high",rx->channel);
+      sprintf(value,"%d",rx->waterfall_high);
+      setProperty(name,value);
+  }
+  sprintf(name,"receiver[%d].waterfall_automatic",rx->channel);
+  sprintf(value,"%d",rx->waterfall_automatic);
+  setProperty(name,value);
+  sprintf(name,"receiver[%d].waterfall_ft8_marker",rx->channel);
+  sprintf(value,"%d",rx->waterfall_ft8_marker);
+  setProperty(name,value);
 
-        sprintf(name, "receiver[%d].%s", rx->channel, field->name);
-        void *ptr = (char *)rx + field->offset;
-        fprintf(stderr, "Field: %s, offset=%zu, ptr=%p\n", field->name, field->offset, ptr);
+  sprintf(name,"receiver[%d].frequency_a",rx->channel);
+  sprintf(value,"%" G_GINT64_FORMAT,rx->frequency_a);
+  setProperty(name,value);
+  sprintf(name,"receiver[%d].lo_a",rx->channel);
+  sprintf(value,"%" G_GINT64_FORMAT,rx->lo_a);
+  setProperty(name,value);
+  sprintf(name,"receiver[%d].error_a",rx->channel);
+  sprintf(value,"%" G_GINT64_FORMAT,rx->error_a);
+  setProperty(name,value);
+  sprintf(name,"receiver[%d].lo_tx",rx->channel);
+  sprintf(value,"%" G_GINT64_FORMAT,rx->lo_tx);
+  setProperty(name,value);
+  sprintf(name,"receiver[%d].error_tx",rx->channel);
+  sprintf(value,"%" G_GINT64_FORMAT,rx->error_tx);
+  setProperty(name,value);
+  sprintf(name,"receiver[%d].tx_track_rx",rx->channel);
+  sprintf(value,"%d",rx->tx_track_rx);
+  setProperty(name,value);
+  sprintf(name,"receiver[%d].band_a",rx->channel);
+  sprintf(value,"%d",rx->band_a);
+  setProperty(name,value);
+  sprintf(name,"receiver[%d].mode_a",rx->channel);
+  sprintf(value,"%d",rx->mode_a);
+  setProperty(name,value);
+  sprintf(name,"receiver[%d].filter_a",rx->channel);
+  sprintf(value,"%d",rx->filter_a);
+  setProperty(name,value);
+  sprintf(name,"receiver[%d].filter_low_a",rx->channel);
+  sprintf(value,"%d",rx->filter_low_a);
+  setProperty(name,value);
+  sprintf(name,"receiver[%d].filter_high_a",rx->channel);
+  sprintf(value,"%d",rx->filter_high_a);
+  setProperty(name,value);
 
-        switch (field->type) {
-            case TYPE_INT:
-                fprintf(stderr, "  Value: %d\n", *(int *)ptr);
-                sprintf(value, "%d", *(int *)ptr);
-                setProperty(name, value);
-                break;
-            case TYPE_LONG:
-                fprintf(stderr, "  Value: %ld\n", *(long *)ptr);
-                sprintf(value, "%ld", *(long *)ptr);
-                setProperty(name, value);
-                break;
-            case TYPE_INT64:
-                fprintf(stderr, "  Value: %" G_GINT64_FORMAT "\n", *(gint64 *)ptr);
-                sprintf(value, "%" G_GINT64_FORMAT, *(gint64 *)ptr);
-                setProperty(name, value);
-                break;
-            case TYPE_DOUBLE:
-                fprintf(stderr, "  Value: %f\n", *(double *)ptr);
-                sprintf(value, "%f", *(double *)ptr);
-                setProperty(name, value);
-                break;
-            case TYPE_STRING:
-                break;
-        }
-        fprintf(stderr, "Saved: %s = %s\n", name, value);
-    }
 
-    // Special case: strings
-    fprintf(stderr, "Saving audio_name: rx->audio_name=%p\n", rx->audio_name);
-    if (rx->audio_name) {
-        sprintf(name, "receiver[%d].audio_name", rx->channel);
-        fprintf(stderr, "Saving: %s = %s\n", name, rx->audio_name);
-        setProperty(name, rx->audio_name);
-    }
+  sprintf(name,"receiver[%d].frequency_b",rx->channel);
+  sprintf(value,"%" G_GINT64_FORMAT,rx->frequency_b);
+  setProperty(name,value);
+  sprintf(name,"receiver[%d].lo_b",rx->channel);
+  sprintf(value,"%" G_GINT64_FORMAT,rx->lo_b);
+  setProperty(name,value);
+  sprintf(name,"receiver[%d].error_b",rx->channel);
+  sprintf(value,"%" G_GINT64_FORMAT,rx->error_b);
+  setProperty(name,value);
+#ifdef USE_VFO_B_MODE_AND_FILTER
+  sprintf(name,"receiver[%d].band_b",rx->channel);
+  sprintf(value,"%d",rx->band_b);
+  setProperty(name,value);
+  sprintf(name,"receiver[%d].mode_b",rx->channel);
+  sprintf(value,"%d",rx->mode_b);
+  setProperty(name,value);
+  sprintf(name,"receiver[%d].filter_b",rx->channel);
+  sprintf(value,"%d",rx->filter_b);
+  setProperty(name,value);
+  sprintf(name,"receiver[%d].filter_low_b",rx->channel);
+  sprintf(value,"%d",rx->filter_low_b);
+  setProperty(name,value);
+  sprintf(name,"receiver[%d].filter_high_b",rx->channel);
+  sprintf(value,"%d",rx->filter_high_b);
+  setProperty(name,value);
+#endif
 
-    fprintf(stderr, "Saving rigctl_serial_port: rx->rigctl_serial_port=%s\n", rx->rigctl_serial_port);
-    sprintf(name, "receiver[%d].rigctl_serial_port", rx->channel);
-    setProperty(name, rx->rigctl_serial_port);
-    fprintf(stderr, "Saved: %s = %s\n", name, rx->rigctl_serial_port);
+  sprintf(name,"receiver[%d].ctun",rx->channel);
+  sprintf(value,"%d",rx->ctun);
+  setProperty(name,value);
+  sprintf(name,"receiver[%d].ctun_offset",rx->channel);
+  sprintf(value,"%ld",rx->ctun_offset);
+  setProperty(name,value);
+  sprintf(name,"receiver[%d].ctun_frequency",rx->channel);
+  sprintf(value,"%ld",rx->ctun_frequency);
+  setProperty(name,value);
+  sprintf(name,"receiver[%d].ctun_min",rx->channel);
+  sprintf(value,"%ld",rx->ctun_min);
+  setProperty(name,value);
+  sprintf(name,"receiver[%d].ctun_max",rx->channel);
+  sprintf(value,"%ld",rx->ctun_max);
+  setProperty(name,value);
 
-    // Special case: equalizer array
-    fprintf(stderr, "Saving equalizer array\n");
-    for (i = 0; i < 4; i++) {
-        sprintf(name, "receiver[%d].equalizer[%d]", rx->channel, i);
-        sprintf(value, "%d", rx->equalizer[i]);
-        fprintf(stderr, "Saving: %s = %s\n", name, value);
-        setProperty(name, value);
-    }
+  sprintf(name,"receiver[%d].qo100_beacon",rx->channel);
+  sprintf(value,"%d",rx->qo100_beacon);
+  setProperty(name,value);
+  
+  sprintf(name,"receiver[%d].split",rx->channel);
+  sprintf(value,"%d",rx->split);
+  setProperty(name,value);
 
-    // GTK window properties
-    fprintf(stderr, "Saving window properties: rx->window=%p\n", rx->window);
-    if (rx->window) {
-        gtk_window_get_position(GTK_WINDOW(rx->window), &x, &y);
-        sprintf(name, "receiver[%d].x", rx->channel);
-        sprintf(value, "%d", x);
-        fprintf(stderr, "Saving: %s = %s\n", name, value);
-        setProperty(name, value);
-        sprintf(name, "receiver[%d].y", rx->channel);
-        sprintf(value, "%d", y);
-        fprintf(stderr, "Saving: %s = %s\n", name, value);
-        setProperty(name, value);
+  sprintf(name,"receiver[%d].offset",rx->channel);
+  sprintf(value,"%ld",rx->offset);
+  setProperty(name,value);
+  sprintf(name,"receiver[%d].bandstack",rx->channel);
+  sprintf(value,"%d",rx->bandstack);
+  setProperty(name,value);
 
-        gtk_window_get_size(GTK_WINDOW(rx->window), &width, &height);
-        sprintf(name, "receiver[%d].width", rx->channel);
-        sprintf(value, "%d", width);
-        fprintf(stderr, "Saving: %s = %s\n", name, value);
-        setProperty(name, value);
-        sprintf(name, "receiver[%d].height", rx->channel);
-        sprintf(value, "%d", height);
-        fprintf(stderr, "Saving: %s = %s\n", name, value);
-        setProperty(name, value);
-    }
+  sprintf(name,"receiver[%d].remote_audio",rx->channel);
+  sprintf(value,"%d",rx->remote_audio);
+  setProperty(name,value);
 
-    fprintf(stderr, "Saving paned properties: rx->vpaned=%p\n", rx->vpaned);
-    if (rx->vpaned) {
-        fprintf(stderr, "receiver_save_state: paned_position=%d paned_height=%d paned_percent=%f\n",
-                rx->paned_position, gtk_widget_get_allocated_height(rx->vpaned), rx->paned_percent);
-    } else {
-        fprintf(stderr, "receiver_save_state: paned_position=%d paned_percent=%f\n",
-                rx->paned_position, rx->paned_percent);
-    }
+  sprintf(name,"receiver[%d].local_audio",rx->channel);
+  sprintf(value,"%d",rx->local_audio);
+  setProperty(name,value);
+  if(rx->audio_name!=NULL) {
+    sprintf(name,"receiver[%d].audio_name",rx->channel);
+    setProperty(name,rx->audio_name);
+  }
+  sprintf(name,"receiver[%d].output_index",rx->channel);
+  sprintf(value,"%d",rx->output_index);
+  setProperty(name,value);
+  sprintf(name,"receiver[%d].mute_when_not_active",rx->channel);
+  sprintf(value,"%d",rx->mute_when_not_active);
+  setProperty(name,value);
+  sprintf(name,"receiver[%d].local_audio_buffer_size",rx->channel);
+  sprintf(value,"%d",rx->local_audio_buffer_size);
+  setProperty(name,value);
+  sprintf(name,"receiver[%d].local_audio_latency",rx->channel);
+  sprintf(value,"%d",rx->local_audio_latency);
+  setProperty(name,value);
+  sprintf(name,"receiver[%d].audio_channels",rx->channel);
+  sprintf(value,"%d",rx->audio_channels);
+  setProperty(name,value);  
+  
+
+  sprintf(name,"receiver[%d].step",rx->channel);
+  sprintf(value,"%ld",rx->step);
+  setProperty(name,value);
+  sprintf(name,"receiver[%d].zoom",rx->channel);
+  sprintf(value,"%d",rx->zoom);
+  setProperty(name,value);
+  sprintf(name,"receiver[%d].pan",rx->channel);
+  sprintf(value,"%d",rx->pan);
+  setProperty(name,value);
+
+  sprintf(name,"receiver[%d].agc",rx->channel);
+  sprintf(value,"%d",rx->agc);
+  setProperty(name,value);
+  sprintf(name,"receiver[%d].agc_gain",rx->channel);
+  sprintf(value,"%f",rx->agc_gain);
+  setProperty(name,value);
+  sprintf(name,"receiver[%d].agc_slope",rx->channel);
+  sprintf(value,"%f",rx->agc_slope);
+  setProperty(name,value);
+  sprintf(name,"receiver[%d].agc_hang_threshold",rx->channel);
+  sprintf(value,"%f",rx->agc_hang_threshold);
+  setProperty(name,value);
+  
+  sprintf(name,"receiver[%d].enable_equalizer",rx->channel);
+  sprintf(value,"%d",rx->enable_equalizer);
+  setProperty(name,value);
+  for(i=0;i<4;i++) {
+    sprintf(name,"receiver[%d].equalizer[%d]",rx->channel,i);
+    sprintf(value,"%d",rx->equalizer[i]);
+    setProperty(name,value);
+  }
+
+  sprintf(name,"receiver[%d].volume",rx->channel);
+  sprintf(value,"%f",rx->volume);
+  setProperty(name,value);
+
+  sprintf(name,"receiver[%d].nr",rx->channel);
+  sprintf(value,"%d",rx->nr);
+  setProperty(name,value);
+  sprintf(name,"receiver[%d].nr2",rx->channel);
+  sprintf(value,"%d",rx->nr2);
+  setProperty(name,value);
+  sprintf(name,"receiver[%d].nb",rx->channel);
+  sprintf(value,"%d",rx->nb);
+  setProperty(name,value);
+  sprintf(name,"receiver[%d].nb2",rx->channel);
+  sprintf(value,"%d",rx->nb2);
+  setProperty(name,value);
+  sprintf(name,"receiver[%d].anf",rx->channel);
+  sprintf(value,"%d",rx->anf);
+  setProperty(name,value);
+  sprintf(name,"receiver[%d].snb",rx->channel);
+  sprintf(value,"%d",rx->snb);
+  setProperty(name,value);
+
+  sprintf(name,"receiver[%d].rit_enabled",rx->channel);
+  sprintf(value,"%d",rx->rit_enabled);
+  setProperty(name,value);
+  sprintf(name,"receiver[%d].rit",rx->channel);
+  sprintf(value,"%ld",rx->rit);
+  setProperty(name,value);
+  sprintf(name,"receiver[%d].rit_step",rx->channel);
+  sprintf(value,"%ld",rx->rit_step);
+  setProperty(name,value);
+
+  sprintf(name,"receiver[%d].bpsk_enable",rx->channel);
+  sprintf(value,"%d",rx->bpsk_enable);
+  setProperty(name,value);
+
+  sprintf(name,"receiver[%d].split",rx->channel);
+  sprintf(value,"%d",rx->split);
+  setProperty(name,value);
+  sprintf(name,"receiver[%d].duplex",rx->channel);
+  sprintf(value,"%d",rx->duplex);
+  setProperty(name,value);
+  sprintf(name,"receiver[%d].mute_while_transmitting",rx->channel);
+  sprintf(value,"%d",rx->mute_while_transmitting);
+  setProperty(name,value);
+
+  sprintf(name,"receiver[%d].rigctl_port",rx->channel);
+  sprintf(value,"%d",rx->rigctl_port);
+  setProperty(name,value);
+  sprintf(name,"receiver[%d].rigctl_enable",rx->channel);
+  sprintf(value,"%d",rx->rigctl_enable);
+  setProperty(name,value);
+  sprintf(name,"receiver[%d].rigctl_serial_enable",rx->channel);
+  sprintf(value,"%d",rx->rigctl_serial_enable);
+  setProperty(name,value);
+  sprintf(name,"receiver[%d].rigctl_serial_port",rx->channel);
+  setProperty(name,rx->rigctl_serial_port);
+  sprintf(name,"receiver[%d].rigctl_debug",rx->channel);
+  sprintf(value,"%d",rx->rigctl_debug);
+  setProperty(name,value);
+
+
+  gtk_window_get_position(GTK_WINDOW(rx->window),&x,&y);
+  sprintf(name,"receiver[%d].x",rx->channel);
+  sprintf(value,"%d",x);
+  setProperty(name,value);
+  sprintf(name,"receiver[%d].y",rx->channel);
+  sprintf(value,"%d",y);
+  setProperty(name,value);
+
+  gtk_window_get_size(GTK_WINDOW(rx->window),&width,&height);
+  sprintf(name,"receiver[%d].width",rx->channel);
+  sprintf(value,"%d",width);
+  setProperty(name,value);
+  sprintf(name,"receiver[%d].height",rx->channel);
+  sprintf(value,"%d",height);
+  setProperty(name,value);
+
+  rx->paned_position=gtk_paned_get_position(GTK_PANED(rx->vpaned));
+  sprintf(name,"receiver[%d].paned_position",rx->channel);
+  sprintf(value,"%d",rx->paned_position);
+  setProperty(name,value);
+
+  gint paned_height=gtk_widget_get_allocated_height(rx->vpaned);
+  double paned_percent=(double)rx->paned_position/(double)paned_height;
+
+  sprintf(name,"receiver[%d].paned_percent",rx->channel);
+  sprintf(value,"%f",paned_percent);
+  setProperty(name,value);
+  
+  sprintf(name,"receiver[%d].show_rx",rx->channel);
+  sprintf(value,"%i", rx->show_rx);
+  setProperty(name,value);
+
+fprintf(stderr,"receiver_save_sate: paned_position=%d paned_height=%d paned_percent=%f\n",rx->paned_position, paned_height, paned_percent);
 }
 
 void receiver_restore_state(RECEIVER *rx) {
-    char name[80];
-    char *value;
+  char name[80];
+  char *value;
+  int i;
 
-    // Generic restore loop
-    for (const FieldDescriptor *field = receiver_fields; field->name; field++) {
-        sprintf(name, "receiver[%d].%s", rx->channel, field->name);
-        value = getProperty(name);
-        if (!value) continue;
+  sprintf(name,"receiver[%d].adc",rx->channel);
+  value=getProperty(name);
+  if(value) rx->adc=atol(value);
 
-        void *ptr = (char *)rx + field->offset;
-        switch (field->type) {
-            case TYPE_INT:
-                *(int *)ptr = atoi(value);
-                break;
-            case TYPE_LONG:
-                *(long *)ptr = atol(value);
-                break;
-            case TYPE_INT64:
-                *(gint64 *)ptr = atoll(value);
-                break;
-            case TYPE_DOUBLE:
-                *(double *)ptr = atof(value);
-                break;
-            case TYPE_STRING:
-                // Handled separately
-                break;
-        }
-    }
+  sprintf(name,"receiver[%d].sample_rate",rx->channel);
+  value=getProperty(name);
+  if(value) rx->sample_rate=atol(value);
+  sprintf(name,"receiver[%d].dsp_rate",rx->channel);
+  value=getProperty(name);
+  if(value) rx->dsp_rate=atol(value);
+  sprintf(name,"receiver[%d].output_rate",rx->channel);
+  value=getProperty(name);
+  if(value) rx->output_rate=atol(value);
 
-    // Special case: strings
-    sprintf(name, "receiver[%d].audio_name", rx->channel);
-    value = getProperty(name);
-    if (value) {
-        rx->audio_name = g_new0(gchar, strlen(value) + 1);
-        strcpy(rx->audio_name, value);
-    }
+  sprintf(name,"receiver[%d].frequency_a",rx->channel);
+  value=getProperty(name);
+  if(value) rx->frequency_a=atol(value);
+  sprintf(name,"receiver[%d].lo_a",rx->channel);
+  value=getProperty(name);
+  if(value) rx->lo_a=atol(value);
+  sprintf(name,"receiver[%d].lo_tx",rx->channel);
+  value=getProperty(name);
+  if(value) rx->lo_tx=atol(value);
+  sprintf(name,"receiver[%d].error_tx",rx->channel);
+  value=getProperty(name);
+  if(value) rx->error_tx=atol(value);
+  sprintf(name,"receiver[%d].tx_track_rx",rx->channel);
+  value=getProperty(name);
+  if(value) rx->tx_track_rx=atoi(value);
+  sprintf(name,"receiver[%d].error_a",rx->channel);
+  value=getProperty(name);
+  if(value) rx->error_a=atol(value);
+  sprintf(name,"receiver[%d].band_a",rx->channel);
+  value=getProperty(name);
+  if(value) rx->band_a=atoi(value);
+  sprintf(name,"receiver[%d].mode_a",rx->channel);
+  value=getProperty(name);
+  if(value) rx->mode_a=atoi(value);
+  sprintf(name,"receiver[%d].filter_a",rx->channel);
+  value=getProperty(name);
+  if(value) rx->filter_a=atoi(value);
+  sprintf(name,"receiver[%d].filter_low_a",rx->channel);
+  value=getProperty(name);
+  if(value) rx->filter_low_a=atoi(value);
+  sprintf(name,"receiver[%d].filter_high_a",rx->channel);
+  value=getProperty(name);
+  if(value) rx->filter_high_a=atoi(value);
+  sprintf(name,"receiver[%d].frequency_b",rx->channel);
+  value=getProperty(name);
+  if(value) rx->frequency_b=atol(value);
+  sprintf(name,"receiver[%d].lo_b",rx->channel);
+  value=getProperty(name);
+  if(value) rx->lo_b=atol(value);
+  sprintf(name,"receiver[%d].error_b",rx->channel);
+  value=getProperty(name);
+  if(value) rx->error_b=atol(value);
+#ifdef USE_VFO_B_MODE_AND_FILTER
+  sprintf(name,"receiver[%d].band_b",rx->channel);
+  value=getProperty(name);
+  if(value) rx->band_b=atoi(value);
+  sprintf(name,"receiver[%d].mode_b",rx->channel);
+  value=getProperty(name);
+  if(value) rx->mode_b=atoi(value);
+  sprintf(name,"receiver[%d].filter_b",rx->channel);
+  value=getProperty(name);
+  if(value) rx->filter_b=atoi(value);
+  sprintf(name,"receiver[%d].filter_low_b",rx->channel);
+  value=getProperty(name);
+  if(value) rx->filter_low_b=atoi(value);
+  sprintf(name,"receiver[%d].filter_high_b",rx->channel);
+  value=getProperty(name);
+  if(value) rx->filter_high_b=atoi(value);
+#endif
 
-    sprintf(name, "receiver[%d].rigctl_serial_port", rx->channel);
-    value = getProperty(name);
-    if (value) {
-        strncpy(rx->rigctl_serial_port, value, sizeof(rx->rigctl_serial_port) - 1);
-        rx->rigctl_serial_port[sizeof(rx->rigctl_serial_port) - 1] = '\0';
-    }
+  sprintf(name,"receiver[%d].ctun",rx->channel);
+  value=getProperty(name);
+  if(value) rx->ctun=atoi(value);
+  sprintf(name,"receiver[%d].ctun_offset",rx->channel);
+  value=getProperty(name);
+  if(value) rx->ctun_offset=atol(value);
+  sprintf(name,"receiver[%d].ctun_frequency",rx->channel);
+  value=getProperty(name);
+  if(value) rx->ctun_frequency=atol(value);
+  sprintf(name,"receiver[%d].ctun_min",rx->channel);
+  value=getProperty(name);
+  if(value) rx->ctun_min=atol(value);
+  sprintf(name,"receiver[%d].ctun_max",rx->channel);
+  value=getProperty(name);
+  if(value) rx->ctun_max=atol(value);
 
-    // Special case: equalizer array
-    for (int i = 0; i < 4; i++) {
-        sprintf(name, "receiver[%d].equalizer[%d]", rx->channel, i);
-        value = getProperty(name);
-        if (value) rx->equalizer[i] = atoi(value);
-    }
+  sprintf(name,"receiver[%d].qo100_beacon",rx->channel);
+  value=getProperty(name);
+  if(value) rx->qo100_beacon=atoi(value);
+
+  sprintf(name,"receiver[%d].split",rx->channel);
+  value=getProperty(name);
+  if(value) rx->split=atoi(value);
+
+  sprintf(name,"receiver[%d].remote_audio",rx->channel);
+  value=getProperty(name);
+  if(value) rx->remote_audio=atoi(value);
+
+  sprintf(name,"receiver[%d].local_audio",rx->channel);
+  value=getProperty(name);
+  if(value) rx->local_audio=atoi(value);
+  sprintf(name,"receiver[%d].audio_name",rx->channel);
+  value=getProperty(name);
+  if(value) {
+    rx->audio_name=g_new0(gchar,strlen(value)+1);
+    strcpy(rx->audio_name,value);
+  }
+  sprintf(name,"receiver[%d].output_index",rx->channel);
+  value=getProperty(name);
+  if(value) rx->output_index=atoi(value);
+  sprintf(name,"receiver[%d].mute_when_not_active",rx->channel);
+  value=getProperty(name);
+  if(value) rx->mute_when_not_active=atoi(value);
+  sprintf(name,"receiver[%d].local_audio_buffer_size",rx->channel);
+  value=getProperty(name);
+  if(value) rx->local_audio_buffer_size=atoi(value);
+  sprintf(name,"receiver[%d].local_audio_latency",rx->channel);
+  value=getProperty(name);
+  if(value) rx->local_audio_latency=atoi(value);
+  sprintf(name,"receiver[%d].audio_channels",rx->channel);
+  value=getProperty(name);  
+  if(value) rx->audio_channels=atoi(value);  
+
+  sprintf(name,"receiver[%d].step",rx->channel);
+  value=getProperty(name);
+  if(value) rx->step=atol(value);
+  sprintf(name,"receiver[%d].zoom",rx->channel);
+  value=getProperty(name);
+  if(value) rx->zoom=atoi(value);
+  sprintf(name,"receiver[%d].pan",rx->channel);
+  value=getProperty(name);
+  if(value) rx->pan=atoi(value);
+
+  sprintf(name,"receiver[%d].volume",rx->channel);
+  value=getProperty(name);
+  if(value) rx->volume=atof(value);
+
+  sprintf(name,"receiver[%d].nr",rx->channel);
+  value=getProperty(name);
+  if(value) rx->nr=atoi(value);
+  sprintf(name,"receiver[%d].nr2",rx->channel);
+  value=getProperty(name);
+  if(value) rx->nr2=atoi(value);
+  sprintf(name,"receiver[%d].nb",rx->channel);
+  value=getProperty(name);
+  if(value) rx->nb=atoi(value);
+  sprintf(name,"receiver[%d].nb2",rx->channel);
+  value=getProperty(name);
+  if(value) rx->nb2=atoi(value);
+  sprintf(name,"receiver[%d].anf",rx->channel);
+  value=getProperty(name);
+  if(value) rx->anf=atoi(value);
+  sprintf(name,"receiver[%d].snb",rx->channel);
+  value=getProperty(name);
+  if(value) rx->snb=atoi(value);
+
+  sprintf(name,"receiver[%d].agc",rx->channel);
+  value=getProperty(name);
+  if(value) rx->agc=atoi(value);
+  sprintf(name,"receiver[%d].agc_gain",rx->channel);
+  value=getProperty(name);
+  if(value) rx->agc_gain=atof(value);
+  sprintf(name,"receiver[%d].agc_slope",rx->channel);
+  value=getProperty(name);
+  if(value) rx->agc_slope=atof(value);
+  sprintf(name,"receiver[%d].agc_hang_threshold",rx->channel);
+  value=getProperty(name);
+  if(value) rx->agc_hang_threshold=atof(value);
+  
+  sprintf(name,"receiver[%d].enable_equalizer",rx->channel);
+  value=getProperty(name);
+  if(value) rx->enable_equalizer=atoi(value);
+  for(i=0;i<4;i++) {
+    sprintf(name,"receiver[%d].equalizer[%d]",rx->channel,i);
+    value=getProperty(name);
+    if(value) rx->equalizer[i]=atoi(value);
+  }
+
+  sprintf(name,"receiver[%d].rit_enabled",rx->channel);
+  value=getProperty(name);
+  if(value) rx->rit_enabled=atoi(value);
+  sprintf(name,"receiver[%d].rit",rx->channel);
+  value=getProperty(name);
+  if(value) rx->rit=atol(value);
+  sprintf(name,"receiver[%d].rit_step",rx->channel);
+  value=getProperty(name);
+  if(value) rx->rit_step=atol(value);
+ 
+  sprintf(name,"receiver[%d].bpsk_enable",rx->channel);
+  value=getProperty(name);
+  if(value) rx->bpsk_enable=atoi(value);
+
+  sprintf(name,"receiver[%d].fps",rx->channel);
+  value=getProperty(name);
+  if(value) rx->fps=atoi(value);
+  
+  sprintf(name,"receiver[%d].display_average_time",rx->channel);
+  value=getProperty(name);
+  if(value) rx->display_average_time=atof(value);
+  
+  sprintf(name,"receiver[%d].panadapter_low",rx->channel);
+  value=getProperty(name);
+  if(value) rx->panadapter_low=atoi(value);
+  sprintf(name,"receiver[%d].panadapter_high",rx->channel);
+  value=getProperty(name);
+  if(value) rx->panadapter_high=atoi(value);
+  sprintf(name,"receiver[%d].panadapter_step",rx->channel);
+  value=getProperty(name);
+  if(value) rx->panadapter_step=atoi(value);
+  sprintf(name,"receiver[%d].panadapter_filled",rx->channel);
+  value=getProperty(name);
+  if(value) rx->panadapter_filled=atoi(value);
+  sprintf(name,"receiver[%d].panadapter_gradient",rx->channel);
+  value=getProperty(name);
+  if(value) rx->panadapter_gradient=atoi(value);
+  sprintf(name,"receiver[%d].panadapter_agc_line",rx->channel);
+  value=getProperty(name);
+  if(value) rx->panadapter_agc_line=atoi(value);
+
+  sprintf(name,"receiver[%d].waterfall_low",rx->channel);
+  value=getProperty(name);
+  if(value) rx->waterfall_low=atoi(value);
+  sprintf(name,"receiver[%d].waterfall_high",rx->channel);
+  value=getProperty(name);
+  if(value) rx->waterfall_high=atoi(value);
+  sprintf(name,"receiver[%d].waterfall_automatic",rx->channel);
+  value=getProperty(name);
+  if(value) rx->waterfall_automatic=atoi(value);
+  sprintf(name,"receiver[%d].waterfall_ft8_marker",rx->channel);
+  value=getProperty(name);
+  if(value) rx->waterfall_ft8_marker=atoi(value);
+
+  sprintf(name,"receiver[%d].split",rx->channel);
+  value=getProperty(name);
+  if(value) rx->split=atoi(value);
+  sprintf(name,"receiver[%d].duplex",rx->channel);
+  value=getProperty(name);
+  if(value) rx->duplex=atoi(value);
+  sprintf(name,"receiver[%d].mute_while_transmitting",rx->channel);
+  value=getProperty(name);
+  if(value) rx->mute_while_transmitting=atoi(value);
+
+  sprintf(name,"receiver[%d].rigctl_port",rx->channel);
+  value=getProperty(name);
+  if(value) rx->rigctl_port=atoi(value);
+  sprintf(name,"receiver[%d].rigctl_enable",rx->channel);
+  value=getProperty(name);
+  if(value) rx->rigctl_enable=atoi(value);
+  sprintf(name,"receiver[%d].rigctl_serial_enable",rx->channel);
+  value=getProperty(name);
+  if(value) rx->rigctl_serial_enable=atoi(value);
+  sprintf(name,"receiver[%d].rigctl_serial_port",rx->channel);
+  value=getProperty(name);
+  if(value) strcpy(rx->rigctl_serial_port,value);
+  sprintf(name,"receiver[%d].rigctl_debug",rx->channel);
+  value=getProperty(name);
+  if(value) rx->rigctl_debug=atoi(value);
+
+  sprintf(name,"receiver[%d].paned_position",rx->channel);
+  value=getProperty(name);
+  if(value) rx->paned_position=atoi(value);
+
+  sprintf(name,"receiver[%d].paned_percent",rx->channel);
+  value=getProperty(name);
+  if(value) rx->paned_percent=atof(value);
+  
+  sprintf(name,"receiver[%d].show_rx",rx->channel);
+  value=getProperty(name);
+  if(value) rx->show_rx=atoi(value);
 }
 
 void receiver_xvtr_changed(RECEIVER *rx) {
 }
 
-void receiver_change_sample_rate(RECEIVER *rx, int sample_rate) {
-    if (!rx) {
-        fprintf(stderr, "receiver_change_sample_rate: rx is NULL\n");
-        return;
-    }
+void receiver_change_sample_rate(RECEIVER *rx,int sample_rate) {
+g_print("receiver_change_sample_rate: from %d to %d radio=%d\n",rx->sample_rate,sample_rate,radio->sample_rate);
+  g_mutex_lock(&rx->mutex);
+  SetChannelState(rx->channel,0,1);
+  g_free(rx->audio_output_buffer);
+  rx->audio_output_buffer=NULL;
+  rx->sample_rate=sample_rate;
+  rx->output_samples=rx->buffer_size/(rx->sample_rate/48000);
+  rx->audio_output_buffer=g_new0(gdouble,2*rx->output_samples);
+  rx->hz_per_pixel=(double)rx->sample_rate/(double)rx->samples;
+  //SetInputSamplerate(rx->channel, sample_rate);
+  SetAllRates(rx->channel,rx->sample_rate,48000,48000);
 
-    g_print("receiver_change_sample_rate: from %d to %d radio=%d\n", rx->sample_rate, sample_rate, radio->sample_rate);
+  receiver_init_analyzer(rx);
+  SetEXTANBSamplerate (rx->channel, sample_rate);
+  SetEXTNOBSamplerate (rx->channel, sample_rate);
+fprintf(stderr,"receiver_change_sample_rate: channel=%d rate=%d buffer_size=%d output_samples=%d\n",rx->channel, rx->sample_rate, rx->buffer_size, rx->output_samples);
 
-    // Stop protocol to prevent new IQ samples
-    switch (radio->discovered->protocol) {
-        case PROTOCOL_1:
-            break;
-        case PROTOCOL_2:
-            break;
 #ifdef SOAPYSDR
-        case PROTOCOL_SOAPYSDR:
-            soapy_protocol_stop();
-            break;
+  if(radio->discovered->protocol==PROTOCOL_SOAPYSDR) {
+    soapy_protocol_change_sample_rate(rx,sample_rate);
+/*
+    rx->resample_step=radio->sample_rate/rx->sample_rate;
+g_print("receiver_change_sample_rate: resample_step=%d\n",rx->resample_step);
+*/
+  }
 #endif
-    }
 
-    g_mutex_lock(&rx->mutex);
-    g_mutex_lock(&rx->iq_ring_buffer.mutex);
-
-    // Stop WDSP channel
-    SetChannelState(rx->channel, 0, 1);
-
-    // Free existing buffers
-    if (rx->audio_output_buffer) {
-        g_free(rx->audio_output_buffer);
-        rx->audio_output_buffer = NULL;
-    }
-    if (rx->iq_ring_buffer.buffer) {
-        g_free(rx->iq_ring_buffer.buffer);
-        rx->iq_ring_buffer.buffer = NULL;
-    }
-
-    // Update sample rate and buffer sizes
-    rx->sample_rate = sample_rate;
-    rx->output_samples = rx->buffer_size / (rx->sample_rate / 48000);
-    rx->audio_output_buffer = g_new0(gdouble, 2 * rx->output_samples);
-    rx->iq_ring_buffer.size = rx->buffer_size * 8; // 16x for I and Q
-    rx->iq_ring_buffer.buffer = g_new0(gdouble, rx->iq_ring_buffer.size);
-    rx->iq_ring_buffer.head = 0;
-    rx->iq_ring_buffer.tail = 0;
-    rx->iq_ring_buffer.count = 0;
-    rx->hz_per_pixel = (double)rx->sample_rate / (double)rx->samples;
-
-    // Reinitialize WDSP and analyzer
-    SetAllRates(rx->channel, rx->sample_rate, 48000, 48000);
-    receiver_init_analyzer(rx);
-    SetEXTANBSamplerate(rx->channel, sample_rate);
-    SetEXTNOBSamplerate(rx->channel, sample_rate);
-
-    // Restart WDSP channel
-    SetChannelState(rx->channel, 1, 0);
-    g_mutex_unlock(&rx->iq_ring_buffer.mutex);
-    g_mutex_unlock(&rx->mutex);
-
-    // Restart protocol
-    switch (radio->discovered->protocol) {
-        case PROTOCOL_1:
-            break;
-        case PROTOCOL_2:
-            break;
-#ifdef SOAPYSDR
-        case PROTOCOL_SOAPYSDR:
-            soapy_protocol_change_sample_rate(rx, sample_rate);
-            soapy_protocol_start_receiver(rx);
-            break;
-#endif
-    }
-
-    receiver_update_title(rx);
+  SetChannelState(rx->channel,1,0);
+  g_mutex_unlock(&rx->mutex);
+  receiver_update_title(rx);
 }
 
 void update_noise(RECEIVER *rx) {
@@ -533,63 +714,25 @@ void update_noise(RECEIVER *rx) {
   update_vfo(rx);
 }
 
-static gboolean destroy_widgets_cb(gpointer data) {
-    RECEIVER *rx = (RECEIVER *)data;
-    if (radio->dialog != NULL) {
-        gtk_widget_destroy(radio->dialog);
-        radio->dialog = NULL;
-    }
-    if (rx->bookmark_dialog != NULL) {
-        gtk_widget_destroy(rx->bookmark_dialog);
-        rx->bookmark_dialog = NULL;
-    }
-    return FALSE; // Run once
+static gboolean window_delete(GtkWidget *widget,GdkEvent *event, gpointer data) {
+  RECEIVER *rx=(RECEIVER *)data;
+  g_source_remove(rx->update_timer_id);
+  if(radio->dialog!=NULL) {
+    gtk_widget_destroy(radio->dialog);
+    radio->dialog=NULL;
+  }
+  if(rx->bookmark_dialog!=NULL) {
+    gtk_widget_destroy(rx->bookmark_dialog);
+    rx->bookmark_dialog=NULL;
+  }
+  delete_receiver(rx);
+  return FALSE;
 }
 
-// Helper function for thread join with timeout
-
-static gboolean delete_receiver_idle_cb(gpointer data) {
-    DeleteReceiverData *dr = (DeleteReceiverData *)data;
-    RECEIVER *rx = dr->rx;
-
-    delete_receiver(rx);  // Your existing cleanup
-    g_free(dr);           // Free the wrapper
-
-    return FALSE;         // Run once
-}
-
-static gboolean window_delete(GtkWidget *widget, GdkEvent *event, gpointer data) {
-    RECEIVER *rx = (RECEIVER *)data;
-    ReceiverThreadContext *ctx = &rx->thread_context;
-
-    // Save receiver state before cleanup
-    fprintf(stderr, "saving state for receiver");
-    receiver_save_state(rx);
-
-    // Stop the update timer
-    g_source_remove(rx->update_timer_id);
-    rx->update_timer_id = 0;
-
-    // Signal threads to exit
-    ctx->running = FALSE;
-
-    if (ctx->iq_queue && g_async_queue_length(ctx->iq_queue) < 3) {
-        g_async_queue_push(ctx->iq_queue, GINT_TO_POINTER(-1));
-    }
-
-    if (ctx->render_queue && g_async_queue_length(ctx->render_queue) < 3) {
-        g_async_queue_push(ctx->render_queue, GINT_TO_POINTER(-1));
-    }
-
-    // Defer widget destruction and full cleanup to idle
-    g_idle_add(destroy_widgets_cb, rx);
-
-    // Schedule the final cleanup in delete_receiver()
-    DeleteReceiverData *dr = g_new0(DeleteReceiverData, 1);
-    dr->rx = rx;
-    g_idle_add(delete_receiver_idle_cb, dr);
-
-    return FALSE; // Allow window to be destroyed
+static void focus_in_event_cb(GtkWindow *window,GdkEventFocus *event,gpointer data) {
+  if(event->in) {
+    radio->active_receiver=(RECEIVER *)data;
+  }
 }
 
 gboolean receiver_button_press_event_cb(GtkWidget *widget, GdkEventButton *event, gpointer data) {
@@ -802,14 +945,14 @@ void receiver_move_to(RECEIVER *rx,long long hz) {
 }
 
 gboolean receiver_button_release_event_cb(GtkWidget *widget, GdkEventButton *event, gpointer data) {
-  //gint64 hz;
+  gint64 hz;
   RECEIVER *rx=(RECEIVER *)data;
   int x;
-  //int y;
-  //GdkModifierType state;
+  int y;
+  GdkModifierType state;
   x=event->x;
-  //y=event->y;
-  //state=event->state;
+  y=event->y;
+  state=event->state;
   int moved=x-rx->last_x;
   switch(event->button) {
     case 1: // left button
@@ -841,12 +984,15 @@ gboolean receiver_button_release_event_cb(GtkWidget *widget, GdkEventButton *eve
 }
 
 gboolean receiver_motion_notify_event_cb(GtkWidget *widget, GdkEventMotion *event, gpointer data) {
+  gint x,y;
   GdkModifierType state;
   RECEIVER *rx=(RECEIVER *)data;
-  //long long delta;
+  long long delta;
 
+  x=event->x;
+  y=event->y;
   state=event->state;
-  int moved=event->x-rx->last_x;
+  int moved=x-rx->last_x;
   if(rx->is_panning) {
     int pan=rx->pan+(moved*rx->zoom);
     if(pan<0) {
@@ -855,22 +1001,18 @@ gboolean receiver_motion_notify_event_cb(GtkWidget *widget, GdkEventMotion *even
       pan=rx->pixels-rx->panadapter_width;
     }
     rx->pan=pan;
-    rx->last_x=event->x;
+    rx->last_x=x;
   } else if(!rx->locked) {
     if((state & GDK_BUTTON1_MASK) == GDK_BUTTON1_MASK) {
       //receiver_move(rx,(long long)((double)(moved*rx->hz_per_pixel)),FALSE);
       receiver_move(rx,(long long)((double)(moved*rx->hz_per_pixel)),TRUE);
-      rx->last_x=event->x;
+      rx->last_x=x;
       rx->has_moved=TRUE;
     } else {
-      if(event->x<35 && widget==rx->panadapter) {
-        gdk_window_set_cursor(gtk_widget_get_window(widget),gdk_cursor_new_from_name(gdk_display_get_default(),"v_double_arrow"));
-      } else if(rx->zoom>1 && event->y>=rx->panadapter_height-20) {
-	gdk_window_set_cursor(gtk_widget_get_window(widget),gdk_cursor_new_from_name(gdk_display_get_default(),"h_double_arrow"));
-      } else if(event->x<rx->panadapter_width/2) {
-        gdk_window_set_cursor(gtk_widget_get_window(widget),gdk_cursor_new_from_name(gdk_display_get_default(),"left_side"));
+      if(event->x>4 && event->x<35) {
+        gdk_window_set_cursor(gtk_widget_get_window(widget),gdk_cursor_new(GDK_DOUBLE_ARROW));
       } else {
-        gdk_window_set_cursor(gtk_widget_get_window(widget),gdk_cursor_new_from_name(gdk_display_get_default(),"right_side"));
+        gdk_window_set_cursor(gtk_widget_get_window(widget),gdk_cursor_new(GDK_CROSSHAIR));
       }
     }
   }
@@ -879,9 +1021,11 @@ gboolean receiver_motion_notify_event_cb(GtkWidget *widget, GdkEventMotion *even
 
 gboolean receiver_scroll_event_cb(GtkWidget *widget, GdkEventScroll *event, gpointer data) {
   RECEIVER *rx=(RECEIVER *)data;
+  int x=(int)event->x;
+  int y=(int)event->y;
   int half=rx->panadapter_height/2;
 
-  if(rx->zoom>1 && event->y>=rx->panadapter_height-20) {
+  if(rx->zoom>1 && y>=rx->panadapter_height-20) {
     int pan;
     if(event->direction==GDK_SCROLL_UP) {
       pan=rx->pan+rx->zoom;
@@ -896,15 +1040,15 @@ gboolean receiver_scroll_event_cb(GtkWidget *widget, GdkEventScroll *event, gpoi
     }
     rx->pan=pan;
   } else if(!rx->locked) {
-    if((event->x<35) && (widget==rx->panadapter)) {
+    if((x>4 && x<35) && (widget==rx->panadapter)) {
       if(event->direction==GDK_SCROLL_UP) {
-        if(event->y<half) {
+        if(y<half) {
           rx->panadapter_high=rx->panadapter_high-5;
         } else {
           rx->panadapter_low=rx->panadapter_low-5;
         }
       } else {
-        if(event->y<half) {
+        if(y<half) {
           rx->panadapter_high=rx->panadapter_high+5;
         } else {
           rx->panadapter_low=rx->panadapter_low+5;
@@ -928,44 +1072,70 @@ gboolean receiver_scroll_event_cb(GtkWidget *widget, GdkEventScroll *event, gpoi
 }
         
 static gboolean update_timer_cb(void *data) {
-    int rc;
-    RECEIVER *rx = (RECEIVER *)data;
-    ReceiverThreadContext *ctx = &rx->thread_context;
+  int rc;
+  int rc2;
+  RECEIVER *rx=(RECEIVER *)data;
+  char *ptr;
+  gboolean running;
 
-    g_mutex_lock(&rx->mutex);
-    if (!isTransmitting(radio) || (rx->duplex)) {
-        if (rx->panadapter_resize_timer == -1 && rx->pixel_samples != NULL) {
-            GetPixels(rx->channel, 0, rx->pixel_samples, &rc);
-            if (rc && g_async_queue_length(ctx->render_queue) < 3) { // Allow up to 3 tasks
-                if (ctx->render_queue && g_async_queue_length(ctx->render_queue) < 3) {
-    g_async_queue_push(ctx->render_queue, GINT_TO_POINTER(1));
-}
-            }
+  g_mutex_lock(&rx->mutex);
+  switch(radio->discovered->protocol) {
+    case PROTOCOL_1:
+      running=protocol1_is_running();
+      break;
+    case PROTOCOL_2:
+      running=protocol2_is_running();
+      break;
+#ifdef SOAPYSDR
+    case PROTOCOL_SOAPYSDR:
+      running=soapy_protocol_is_running();
+      break;
+#endif
+  }
+  if(!isTransmitting(radio) || (rx->duplex)) {
+    if(rx->panadapter_resize_timer==-1 && rx->pixel_samples!=NULL) {
+      GetPixels(rx->channel,0,rx->pixel_samples,&rc);
+      
+      
+      if (radio->divmixer[rx->dmix_id] != NULL) {
+        if (radio->divmixer[rx->dmix_id]->calibrate_gain) {      
+          GetPixels(radio->divmixer[rx->dmix_id]->rx_hidden->channel, 0, 
+                    radio->divmixer[rx->dmix_id]->rx_hidden->pixel_samples, &rc2);
+          
         }
-        rx->meter_db = GetRXAMeter(rx->channel, rx->smeter) + radio->meter_calibration;
-        update_meter(rx);
+      }      
+      
+      if(rc) {
+        update_rx_panadapter(rx,running);
+        update_waterfall(rx);
+      } else if(!running) {
+        update_rx_panadapter(rx,running);
+      }
     }
-    update_radio_info(rx);
+    rx->meter_db=GetRXAMeter(rx->channel,rx->smeter) + radio->meter_calibration;
+    update_meter(rx);
+  }
+  update_radio_info(rx);
 
 #ifdef SOAPYSDR
-    if (radio->discovered->protocol == PROTOCOL_SOAPYSDR) {
-        if (radio->transmitter != NULL && radio->discovered->info.soapy.has_temp) {
-            radio->transmitter->updated = FALSE;
-        }
+  if(radio->discovered->protocol==PROTOCOL_SOAPYSDR) {
+    if(radio->transmitter!=NULL && radio->discovered->info.soapy.has_temp) {
+      radio->transmitter->updated=FALSE;
     }
+  }
 #endif
 
-    if (radio->transmitter != NULL && !radio->transmitter->updated) {
-        update_tx_panadapter(radio);
-    }
+  if(radio->transmitter!=NULL && !radio->transmitter->updated) {
+    update_tx_panadapter(radio);
+  }
 
-    g_mutex_unlock(&rx->mutex);
-    return TRUE;
+  g_mutex_unlock(&rx->mutex);
+  return TRUE;
 }
  
 static void set_mode(RECEIVER *rx,int m) {
-  //int previous_mode;
-  //previous_mode=rx->mode_a;
+  int previous_mode;
+  previous_mode=rx->mode_a;
   rx->mode_a=m;
   SetRXAMode(rx->channel, m);
 }
@@ -992,6 +1162,15 @@ void set_filter(RECEIVER *rx,int low,int high) {
 void set_deviation(RECEIVER *rx) {
 fprintf(stderr,"set_deviation: %d\n",rx->deviation);
   SetRXAFMDeviation(rx->channel, (double)rx->deviation);
+  set_squelch(rx);
+}
+
+void set_squelch(RECEIVER *rx) {
+  double fm_sq=pow(10.0, -2.0*rx->squelch);
+  SetRXAFMSQThreshold(rx->channel, fm_sq);
+  rx->squelch_enable = TRUE;
+  SetRXAFMSQRun(rx->channel, rx->squelch_enable);
+  g_print("Set squelch %f %f\n", rx->squelch, fm_sq);
 }
 
 void calculate_display_average(RECEIVER *rx) {
@@ -1033,25 +1212,9 @@ void receiver_filter_changed(RECEIVER *rx,int filter) {
   update_vfo(rx);
 }
 
-void receiver_mode_changed(RECEIVER *rx, int mode) {
-  set_mode(rx, mode);
-  receiver_filter_changed(rx, rx->filter_a);
-
-  // Disable NB, NR, AGC, SNB, ANF, NR2, NB2, EQ for DIGU and DIGL modes, otherwise use current values
-  if (mode == DIGU || mode == DIGL) {
-    SetEXTANBRun(rx->channel, 0);  // Disable NB
-    SetRXAANRRun(rx->channel, 0);  // Disable NR
-    SetRXAAGCMode(rx->channel, AGC_OFF);  // Disable AGC
-    SetRXASNBARun(rx->channel, 0);  // Disable SNB
-    SetRXAANFRun(rx->channel, 0);  // Disable ANF
-    SetRXAEMNRRun(rx->channel, 0);  // Disable NR2
-    SetEXTNOBRun(rx->channel, 0);  // Disable NB2
-    SetRXAEQRun(rx->channel, 0);  // Disable EQ
-  } else {
-    SetRXAAGCMode(rx->channel, rx->agc);  // Use current AGC setting
-    SetRXAEQRun(rx->channel, rx->enable_equalizer);  // Use current EQ setting
-    update_noise(rx);  // Apply NB, NR, SNB, ANF, NR2, NB2 settings
-  }
+void receiver_mode_changed(RECEIVER *rx,int mode) {
+  set_mode(rx,mode);
+  receiver_filter_changed(rx,rx->filter_a);
 }
 
 void receiver_band_changed(RECEIVER *rx,int band) {
@@ -1077,178 +1240,190 @@ void receiver_band_changed(RECEIVER *rx,int band) {
   rx->band_a=band;
   receiver_mode_changed(rx,rx->mode_a);
   receiver_filter_changed(rx,rx->filter_a);
-  #endif
+#endif
   frequency_changed(rx);
 }
 
 static void process_rx_buffer(RECEIVER *rx) {
-    gdouble left_sample = 0.0, right_sample = 0.0;
-    short left_audio_sample, right_audio_sample;
-    SUBRX *subrx = (SUBRX *)rx->subrx;
+  gdouble left_sample,right_sample;
+  short left_audio_sample, right_audio_sample;
+  SUBRX *subrx=(SUBRX *)rx->subrx;
 
-    for (int i = 0; i < rx->output_samples; i++) {
-        if (rx->subrx_enable) {
-            left_sample = rx->audio_output_buffer[i*2];
-            right_sample = subrx->audio_output_buffer[i*2];
-        } else {
-            switch (rx->audio_channels) {
-                case AUDIO_STEREO:
-                    left_sample = rx->audio_output_buffer[i*2];
-                    right_sample = rx->audio_output_buffer[(i*2)+1];
-                    break;
-                case AUDIO_LEFT_ONLY:
-                    left_sample = rx->audio_output_buffer[i*2];
-                    right_sample = 0;
-                    break;
-                case AUDIO_RIGHT_ONLY:
-                    left_sample = 0;
-                    right_sample = rx->audio_output_buffer[(i*2)+1];
-                    break;
-            }
+  for (int i=0;i<rx->output_samples;i++) {
+    // if subrx is enabled left channel is main and right channel is sub
+    if(rx->subrx_enable) {
+      left_sample=rx->audio_output_buffer[i*2];
+      right_sample=subrx->audio_output_buffer[i*2];
+    } else {
+      // Rx option for left channel only, right only, or both channels
+      switch (rx->audio_channels) {
+        case AUDIO_STEREO: {
+          left_sample = rx->audio_output_buffer[i*2];
+          right_sample = rx->audio_output_buffer[(i*2)+1];     
+          break;
+        }      
+        case AUDIO_LEFT_ONLY: {
+          left_sample = rx->audio_output_buffer[i*2];
+          right_sample = 0;
+          break;
         }
-        left_sample = fmax(-1.0, fmin(1.0, left_sample));
-        right_sample = fmax(-1.0, fmin(1.0, right_sample));
-        left_audio_sample = (short)(left_sample * 32767.0);
-        right_audio_sample = (short)(right_sample * 32767.0);
-
-        if (rx->local_audio) {
-            audio_write(rx, (float)left_sample, (float)right_sample);
+        case AUDIO_RIGHT_ONLY: {
+          left_sample = 0;
+          right_sample = rx->audio_output_buffer[(i*2)+1];
+          break;
         }
-
-        if (radio->active_receiver == rx) {
-            if ((isTransmitting(radio) || rx->remote_audio == FALSE) && (!rx->duplex)) {
-                left_audio_sample = 0;
-                right_audio_sample = 0;
-            }
-            switch (radio->discovered->protocol) {
-                case PROTOCOL_1:
-                    if (radio->discovered->device != DEVICE_HERMES_LITE2) {
-                        protocol1_audio_samples(rx, left_audio_sample, right_audio_sample);
-                    }
-                    break;
-                case PROTOCOL_2:
-                    protocol2_audio_samples(rx, left_audio_sample, right_audio_sample);
-                    break;
-            }
-        }
+      }
     }
-    if (rx->local_audio && !rx->output_started) {
-        audio_start_output(rx);
+    left_audio_sample=(short)(left_sample*32767.0);
+    right_audio_sample=(short)(right_sample*32767.0);
+
+
+    if (isTransmitting(radio) && (rx->mute_while_transmitting)) { 
+      left_sample=0;
+      right_sample=0;
     }
+
+    if(rx->local_audio) {
+      audio_write(rx,(float)left_sample,(float)right_sample);
+    }
+
+    if(radio->active_receiver==rx) {
+
+      if ((isTransmitting(radio) || rx->remote_audio==FALSE) &&  (!rx->duplex)) {
+        left_audio_sample=0;
+        right_audio_sample=0;
+      }
+      switch(radio->discovered->protocol) {
+        case PROTOCOL_1:
+          if(radio->discovered->device!=DEVICE_HERMES_LITE2) {
+            protocol1_audio_samples(rx,left_audio_sample,right_audio_sample);
+          }
+          break;
+        case PROTOCOL_2:
+          protocol2_audio_samples(rx,left_audio_sample,right_audio_sample);
+          break;
+      }
+    }
+  }
+  if(rx->local_audio && !rx->output_started) {
+    audio_start_output(rx);
+  }
 }
+
 static void full_rx_buffer(RECEIVER *rx) {
-    int error;
-    RingBuffer *rb = &rx->iq_ring_buffer;
+  int error;
 
-    if (isTransmitting(radio) && (!rx->duplex)) return;
+  if(isTransmitting(radio) && (!rx->duplex)) return;
 
-    g_mutex_lock(&rb->mutex);
-    int min_samples = rx->buffer_size; // 2048 samples
-    if (rb->count < min_samples) {
-        fprintf(stderr, "full_rx_buffer: underflow, channel=%d, count=%d\n", rx->channel, rb->count);
-        g_mutex_unlock(&rb->mutex);
-        return;
-    }
+  // noise blanker works on origianl IQ samples
+  if(rx->nb) {
+     xanbEXT (rx->channel, rx->iq_input_buffer, rx->iq_input_buffer);
+  }
+  if(rx->nb2) {
+     xnobEXT (rx->channel, rx->iq_input_buffer, rx->iq_input_buffer);
+  }
 
-    gdouble *temp_buffer = g_new0(gdouble, rx->buffer_size * 2);
-    for (int i = 0; i < rx->buffer_size * 2; i++) {
-        temp_buffer[i] = rb->buffer[rb->tail];
-        rb->tail = (rb->tail + 1) % rb->size;
-    }
-    rb->count -= rx->buffer_size * 2;
+  g_mutex_lock(&rx->mutex);
+  fexchange0(rx->channel, rx->iq_input_buffer, rx->audio_output_buffer, &error);
+  //if(error!=0 && error!=-2) {
+  if(error!=0) {    
+    fprintf(stderr,"full_rx_buffer: channel=%d fexchange0: error=%d\n",rx->channel,error);
+  }
 
-    g_mutex_unlock(&rb->mutex);
+  if(rx->subrx_enable) {
+    subrx_iq_buffer(rx);
+  }
 
-    if (rx->nb) {
-        xanbEXT(rx->channel, temp_buffer, temp_buffer);
-    }
-    if (rx->nb2) {
-        xnobEXT(rx->channel, temp_buffer, temp_buffer);
-    }
+  Spectrum0(1, rx->channel, 0, 0, rx->iq_input_buffer);
+  
+  process_rx_buffer(rx);
+  g_mutex_unlock(&rx->mutex);
 
-    g_mutex_lock(&rx->mutex);
-    fexchange0(rx->channel, temp_buffer, rx->audio_output_buffer, &error);
-    if (error != 0) {
-        fprintf(stderr, "full_rx_buffer: channel=%d samples=%d fexchange0: error=%d\n",
-                rx->channel, rx->buffer_size, error);
-        if (error == -2) {
-            memset(rx->audio_output_buffer, 0, 2 * rx->output_samples * sizeof(gdouble));
+}
+
+void full_diviqrx_buffer(RECEIVER *rx) {
+  int error;
+
+  if(isTransmitting(radio) && (!rx->duplex)) return;
+
+  // noise blanker works on origianl IQ samples
+  if(rx->nb) {
+     xanbEXT (rx->channel, rx->diviq_input_buffer, rx->diviq_input_buffer);
+  }
+  if(rx->nb2) {
+     xnobEXT (rx->channel, rx->diviq_input_buffer, rx->diviq_input_buffer);
+  }
+
+  g_mutex_lock(&rx->mutex);
+  fexchange0(rx->channel, rx->diviq_input_buffer, rx->audio_output_buffer, &error);
+  //if(error!=0 && error!=-2) {
+  if(error!=0) {    
+    fprintf(stderr,"full_rx_buffer: channel=%d fexchange0: error=%d\n",rx->channel,error);
+  }
+
+  if(rx->subrx_enable) {
+    subrx_iq_buffer(rx);
+  }
+
+  Spectrum0(1, rx->channel, 0, 0, rx->diviq_input_buffer);
+  process_rx_buffer(rx);
+  g_mutex_unlock(&rx->mutex);
+
+}
+
+void add_iq_samples(RECEIVER *rx,double i_sample,double q_sample) {
+  rx->iq_input_buffer[rx->samples*2]=i_sample;
+  rx->iq_input_buffer[(rx->samples*2)+1]=q_sample;
+  rx->samples=rx->samples+1;
+  if(rx->samples>=rx->buffer_size) {
+    // If diversity mixer active, WDSP diversity mixer works on a 
+    // seperate channel to the rx and must all be done pre normal RX dsp
+    if (radio->divmixer[rx->dmix_id] != NULL) {
+      if (radio->divmixer[rx->dmix_id]->calibrate_gain) {
+        full_rx_buffer(rx);
+      }
+      else {
+        //g_print("Mixer %d\n", mixer);
+        // Diversity uses 2 rx channels, if the order of these is processed incorrectly, WDSP
+        // will be working with 1 packet ahead/behind.
+        // Main RX # is less than hidden rx
+        int mixer = rx->dmix_id;
+        if (radio->divmixer[mixer]->rx_visual->channel < radio->divmixer[mixer]->rx_hidden->channel) {
+          if (rx == radio->divmixer[mixer]->rx_hidden) { 
+            diversity_mix_full_buffers(radio->divmixer[mixer]);
+          } else {
+            diversity_add_buffer(radio->divmixer[mixer]);
+          }
+        } else {
+          // Main rx number is greater than the hidden rx
+          if (rx == radio->divmixer[mixer]->rx_visual) {
+            diversity_mix_full_buffers(radio->divmixer[mixer]);        
+          } else {
+            diversity_add_buffer(radio->divmixer[mixer]);         
+          }
         }
-    }
+      }
+    } else {
+      // Non diversity, normal iq packet processing
+      full_rx_buffer(rx);
+    }    
+    rx->samples=0;
+  }
 
-    if (rx->subrx_enable) {
-        subrx_iq_buffer(rx);
-    }
-
-    Spectrum0(1, rx->channel, 0, 0, temp_buffer);
-    g_free(temp_buffer);
-    process_rx_buffer(rx);
-    g_mutex_unlock(&rx->mutex);
+  if(rx->bpsk_enable && rx->bpsk!=NULL) {
+    bpsk_add_iq_samples(rx->bpsk,i_sample,q_sample);
+  }
 }
 
-
-void add_iq_samples(RECEIVER *rx, double i_sample, double q_sample) {
-    ReceiverThreadContext *ctx = &rx->thread_context;
-    RingBuffer *rb = &rx->iq_ring_buffer;
-    gboolean push_queue = FALSE;
-    if (isTransmitting(radio)) {
-        // We're transmitting; don't push to queue
-        return;
-    }
-
-    g_mutex_lock(&rb->mutex);
-if (rb->count >= rb->size - 2) {
-    fprintf(stderr, "add_iq_samples: ring buffer full, channel=%d, count=%d\n", rx->channel, rb->count);
-} else {
-    rb->buffer[rb->head] = i_sample;
-    rb->buffer[rb->head + 1] = q_sample;
-    rb->head = (rb->head + 2) % rb->size;
-    rb->count += 2;
-    if (rb->count >= rx->buffer_size && ctx->iq_queue && g_async_queue_length(ctx->iq_queue) < 10) {
-        push_queue = TRUE;
-    }
-}
-g_mutex_unlock(&rb->mutex);
-
-    if (push_queue) {
-        g_async_queue_push(ctx->iq_queue, GINT_TO_POINTER(1));
-    }
-
-    if (rx->bpsk_enable && rx->bpsk != NULL) {
-        bpsk_add_iq_samples(rx->bpsk, i_sample, q_sample);
-    }
+static gboolean receiver_configure_event_cb(GtkWidget *widget,GdkEventConfigure *event,gpointer data) {
+  RECEIVER *rx=(RECEIVER *)data;
+  gint width=gtk_widget_get_allocated_width(widget);
+  gint height=gtk_widget_get_allocated_height(widget);
+  rx->window_width=width;
+  rx->window_height=height;
+  return FALSE;
 }
 
-// Forward declaration
-static gboolean resize_timeout_cb(gpointer data);
-
-static gboolean receiver_configure_event_cb(GtkWidget *widget, GdkEventConfigure *event, gpointer data) {
-    RECEIVER *rx = (RECEIVER *)data;
-    //ReceiverThreadContext *ctx = &rx->thread_context;
-    gint width = gtk_widget_get_allocated_width(widget);
-    gint height = gtk_widget_get_allocated_height(widget);
-    if (width != rx->window_width || height != rx->window_height) {
-        rx->window_width = width;
-        rx->window_height = height;
-        if (rx->panadapter_resize_timer == -1) {
-            rx->panadapter_resize_timer = g_timeout_add(200, (GSourceFunc)resize_timeout_cb, rx);
-            fprintf(stderr, "Resize event (channel=%d): scheduled width=%d height=%d\n",
-                    rx->channel, width, height);
-        }
-    }
-    return FALSE;
-}
-
-static gboolean resize_timeout_cb(gpointer data) {
-    RECEIVER *rx = (RECEIVER *)data;
-    ReceiverThreadContext *ctx = &rx->thread_context;
-    g_mutex_lock(&ctx->render_mutex);
-    receiver_init_analyzer(rx);
-    g_mutex_unlock(&ctx->render_mutex);
-    rx->panadapter_resize_timer = -1;
-    fprintf(stderr, "Resize (channel=%d): pixels=%d\n", rx->channel, rx->pixels);
-    return FALSE;
-}
 void set_agc(RECEIVER *rx) {
 
   SetRXAAGCMode(rx->channel, rx->agc);
@@ -1291,20 +1466,15 @@ g_print("receiver_update_title: %s\n",title);
   gtk_window_set_title(GTK_WINDOW(rx->window),title);
 }
 
-static gboolean enter (GtkWidget *widget, GdkEventCrossing *event, void *user_data) {
-  RECEIVER *rx=(RECEIVER *)user_data;
-  if(event->x<35 && widget==rx->panadapter) {
-    gdk_window_set_cursor(gtk_widget_get_window(widget),gdk_cursor_new_from_name(gdk_display_get_default(),"v_double_arrow"));
-  } else if(rx->zoom>1 && event->y>=rx->panadapter_height-20) {
-    gdk_window_set_cursor(gtk_widget_get_window(widget),gdk_cursor_new_from_name(gdk_display_get_default(),"h_double_arrow"));
-  } else if(event->x<rx->panadapter_width/2) {
-    gdk_window_set_cursor(gtk_widget_get_window(widget),gdk_cursor_new_from_name(gdk_display_get_default(),"left_side"));
-  } else {
-    gdk_window_set_cursor(gtk_widget_get_window(widget),gdk_cursor_new_from_name(gdk_display_get_default(),"right_side"));
-  }
-  return FALSE;
+static gboolean enter (GtkWidget *ebox, GdkEventCrossing *event, void *user_data) {
+   RECEIVER *rx=(RECEIVER *)user_data;
+   if((event->x>4 && event->x<35) && (ebox==rx->panadapter)) {
+     gdk_window_set_cursor(gtk_widget_get_window(ebox),gdk_cursor_new(GDK_DOUBLE_ARROW));
+   } else {
+     gdk_window_set_cursor(gtk_widget_get_window(ebox),gdk_cursor_new(GDK_CROSSHAIR));
+   }
+   return FALSE;
 }
-
 
 static gboolean leave (GtkWidget *ebox, GdkEventCrossing *event, void *user_data) {
    gdk_window_set_cursor(gtk_widget_get_window(ebox),gdk_cursor_new(GDK_ARROW));
@@ -1331,21 +1501,17 @@ static void create_visual(RECEIVER *rx) {
   rx->table=gtk_table_new(4,6,FALSE);
 
   rx->vfo=create_vfo(rx);
-  gtk_widget_set_size_request(rx->vfo,715,65);
+  gtk_widget_set_size_request(rx->vfo,765,75);
   gtk_table_attach(GTK_TABLE(rx->table), rx->vfo, 0, 3, 0, 1,
       GTK_FILL, GTK_FILL, 0, 0);
-  
-  //GtkWidget *radio_info;
-  //cairo_surface_t *radio_info_surface;    
-  
-  
+    
   rx->radio_info=create_radio_info_visual(rx);
-  gtk_widget_set_size_request(rx->radio_info, 250, 60);        
+  gtk_widget_set_size_request(rx->radio_info, 170, 60);        
   gtk_table_attach(GTK_TABLE(rx->table), rx->radio_info, 3, 4, 0, 1,
       GTK_FILL, GTK_FILL, 0, 0);  
 
   rx->meter=create_meter_visual(rx);
-  gtk_widget_set_size_request(rx->meter,300,60);        // resize from 154 to 300 for custom s-meter
+  gtk_widget_set_size_request(rx->meter,250,60);        // resize from 154 to 300 for custom s-meter
   gtk_table_attach(GTK_TABLE(rx->table), rx->meter, 4, 6, 0, 1,
       GTK_FILL, GTK_FILL, 0, 0);
 
@@ -1441,13 +1607,14 @@ void receiver_init_analyzer(RECEIVER *rx) {
 }
 
 void receiver_change_zoom(RECEIVER *rx,int zoom) {
+g_print("%s: %d\n",__FUNCTION__,zoom);
   rx->zoom=zoom;
   rx->pixels=rx->panadapter_width*rx->zoom;
   if(rx->zoom==1) {
     rx->pan=0;
   } else {
     if(rx->ctun) {
-      //long long min_frequency=rx->frequency_a-(long long)(rx->sample_rate/2);
+      long long min_frequency=rx->frequency_a-(long long)(rx->sample_rate/2);
       rx->pan=(rx->pixels/2)-(rx->panadapter_width/2);
       //rx->pan=((rx->min_frequency)/rx->hz_per_pixel)-(rx->panadapter_width/2);
       if(rx->pan<0) rx->pan=0;
@@ -1459,47 +1626,20 @@ void receiver_change_zoom(RECEIVER *rx,int zoom) {
   receiver_init_analyzer(rx);
 }
 
-RECEIVER *create_receiver(int channel, int sample_rate) {
 
-    RECEIVER *rx = g_new0(RECEIVER, 1);
-    char name [80];
+RECEIVER *create_receiver(int channel,int sample_rate, gboolean show_rx) {
+  RECEIVER *rx=g_new0(RECEIVER,1);
+  char name [80];
   char *value;
   gint x=-1;
   gint y=-1;
-  gint width = rx->window_width; // Initialize with default
-  gint height = rx->window_height; // Initialize with default
-    if (!rx) {
-        fprintf(stderr, "create_receiver: g_new0 failed for RECEIVER\n");
-        return NULL;
-    }
+  gint width;
+  gint height;
 
-    g_print("create_receiver: channel=%d sample_rate=%d\n", channel, sample_rate);
-    g_mutex_init(&rx->mutex);
-
-    // Initialize thread context
-    ReceiverThreadContext *ctx = &rx->thread_context;
-    ctx->running = TRUE;
-    ctx->iq_queue = g_async_queue_new();
-    if (!ctx->iq_queue) {
-        fprintf(stderr, "create_receiver: g_async_queue_new failed for iq_queue\n");
-        g_mutex_clear(&rx->mutex);
-        g_free(rx);
-        return NULL;
-    }
-    ctx->render_queue = g_async_queue_new();
-    if (!ctx->render_queue) {
-        fprintf(stderr, "create_receiver: g_async_queue_new failed for render_queue\n");
-        g_async_queue_unref(ctx->iq_queue);
-        g_mutex_clear(&rx->mutex);
-        g_free(rx);
-        return NULL;
-    }
-    g_mutex_init(&ctx->render_mutex);
-    ctx->wdsp_thread = NULL;
-    ctx->render_thread = NULL;
+g_print("create_receiver: channel=%d sample_rate=%d\n", channel, sample_rate);
+  g_mutex_init(&rx->mutex);
   rx->channel=channel;
   rx->adc=0;
-  
 
   rx->frequency_min=(gint64)radio->discovered->frequency_min;
   rx->frequency_max=(gint64)radio->discovered->frequency_max;
@@ -1579,6 +1719,9 @@ g_print("create_receiver: channel=%d frequency_min=%ld frequency_max=%ld\n", cha
   }
 
   rx->deviation=2500;
+  rx->squelch_enable = FALSE;
+  rx->squelch = 0.1;
+
   rx->filter_a=F5;
   rx->lo_a=0;
   rx->error_a=0;
@@ -1646,6 +1789,8 @@ g_print("create_receiver: channel=%d frequency_min=%ld frequency_max=%ld\n", cha
 #endif
 fprintf(stderr,"create_receiver: buffer_size=%d\n",rx->buffer_size);
   rx->iq_input_buffer=g_new0(gdouble,2*rx->buffer_size);
+  rx->diviq_input_buffer=g_new0(gdouble,2*rx->buffer_size);
+
 
   rx->audio_buffer_size=480;
   rx->audio_buffer=g_new0(guchar,rx->audio_buffer_size);
@@ -1714,7 +1859,7 @@ fprintf(stderr,"create_receiver: fft_size=%d\n",rx->fft_size);
   }
 #endif
   rx->local_audio=FALSE;
-  rx->local_audio_buffer_size=4096;
+  rx->local_audio_buffer_size=2048;
   //rx->local_audio_buffer_size=rx->output_samples;
   rx->local_audio_buffer_offset=0;
   rx->local_audio_buffer=NULL;
@@ -1742,6 +1887,7 @@ fprintf(stderr,"create_receiver: fft_size=%d\n",rx->fft_size);
 
   rx->rigctl_port=19090+rx->channel;
   rx->rigctl_enable=FALSE;
+  rx->cat_client_connected = FALSE;
 
   strcpy(rx->rigctl_serial_port,"/dev/ttyACM0");
   rx->rigctl_serial_baudrate=B9600;
@@ -1761,21 +1907,20 @@ fprintf(stderr,"create_receiver: fft_size=%d\n",rx->fft_size);
   rx->subrx_enable=FALSE;
   rx->subrx=NULL;
 
-  receiver_restore_state(rx);
+  rx->diversity = FALSE;
+  rx->diversity_hidden_rx = -1;
+  rx->dmix_id = MAX_DIVERSITY_MIXERS+1;
 
+  rx->show_rx = show_rx; 
+
+  receiver_restore_state(rx);
+  
   if(radio->discovered->protocol==PROTOCOL_1) {
     if(rx->sample_rate!=sample_rate) {
       rx->sample_rate=sample_rate;
     }
   }
-  rx->buffer_size=2048;
-   // Initialize ring buffer
-    rx->iq_ring_buffer.size = rx->buffer_size * 16; // 16x for I and Q
-    rx->iq_ring_buffer.buffer = g_new0(gdouble, rx->iq_ring_buffer.size);
-    rx->iq_ring_buffer.head = 0;
-    rx->iq_ring_buffer.tail = 0;
-    rx->iq_ring_buffer.count = 0;
-    g_mutex_init(&rx->iq_ring_buffer.mutex);
+
   rx->output_samples=rx->buffer_size/(rx->sample_rate/48000);
   rx->audio_output_buffer=g_new0(gdouble,2*rx->output_samples);
 
@@ -1791,13 +1936,21 @@ g_print("create_receiver: OpenChannel: channel=%d buffer_size=%d sample_rate=%d 
               1, // run
               0.010, 0.025, 0.0, 0.010, 0);
 
-  create_anbEXT(rx->channel,1,rx->buffer_size,rx->sample_rate,0.0001,0.0001,0.0001,0.05,20);
-  create_nobEXT(rx->channel,1,0,rx->buffer_size,rx->sample_rate,0.0001,0.0001,0.0001,0.05,20);
+  // Modified per pihpsdr commit d9af51206087959083feddcb325443d9368dad8c
+  create_anbEXT(rx->channel, 1, rx->buffer_size, rx->sample_rate, 0.00001, 0.00001, 0.00001, 0.05, 4.95);
+  create_nobEXT(rx->channel,1, 0, rx->buffer_size, rx->sample_rate, 0.00001, 0.00001, 0.00001, 0.05, 4.95);
   RXASetNC(rx->channel, rx->fft_size);
   RXASetMP(rx->channel, rx->low_latency);
+#ifdef SOAPYSDR
+  if(radio->discovered->protocol==PROTOCOL_SOAPYSDR) {
+    rx->resample_step=radio->sample_rate/rx->sample_rate;
+g_print("receiver_change_sample_rate: resample_step=%d\n",rx->resample_step);
+  }
+#endif
+
 
   frequency_changed(rx);
-  
+  receiver_mode_changed(rx,rx->mode_a);
 
   SetRXAPanelGain1(rx->channel, rx->volume);
   SetRXAPanelSelect(rx->channel, 3);
@@ -1829,8 +1982,6 @@ g_print("create_receiver: OpenChannel: channel=%d buffer_size=%d sample_rate=%d 
   SetRXAANFRun(rx->channel, rx->anf);
   SetRXASNBARun(rx->channel, rx->snb);
 
-  receiver_mode_changed(rx,rx->mode_a);
-
   int result;
   XCreateAnalyzer(rx->channel, &result, 262144, 1, 1, "");
   if(result != 0) {
@@ -1843,6 +1994,8 @@ g_print("create_receiver: OpenChannel: channel=%d buffer_size=%d sample_rate=%d 
   SetDisplayAverageMode(rx->channel, 0,  AVERAGE_MODE_LOG_RECURSIVE/*display_average_mode*/);
   calculate_display_average(rx); 
 
+  if (!rx->show_rx) return rx;
+  
   create_visual(rx);
   if(rx->window!=NULL) {
     gtk_widget_show_all(rx->window);
@@ -1875,11 +2028,7 @@ g_print("create_receiver: OpenChannel: channel=%d buffer_size=%d sample_rate=%d 
   }
 
   rx->update_timer_id=g_timeout_add(1000/rx->fps,update_timer_cb,(gpointer)rx);
-  // Start WDSP thread
-  ctx->wdsp_thread = g_thread_new("ctx->wdsp_thread", wdsp_processing_thread, rx);
-  // Start Render thread
-  ctx->render_thread = g_thread_new("ctx->render_thread", render_processing_thread, rx);
-
+ 
 
   if(rx->local_audio) {
     if(audio_open_output(rx)<0) {
@@ -1902,7 +2051,6 @@ g_print("create_receiver: OpenChannel: channel=%d buffer_size=%d sample_rate=%d 
 
   return rx;
 }
-
 
 void receiver_set_volume(RECEIVER *rx) {
   SetRXAPanelGain1(rx->channel, rx->volume);

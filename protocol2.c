@@ -144,7 +144,7 @@ static gpointer protocol2_thread(gpointer data);
 static gpointer protocol2_timer_thread(gpointer data);
 static void  process_iq_data(RECEIVER *rx,unsigned char *buffer);
 static void  process_wideband_data(WIDEBAND *w,unsigned char *buffer);
-#ifdef PURESIGNAL
+#ifdef PURESIGNAL_P2
 static void  process_ps_iq_data(RECEIVER *rx);
 #endif
 static void  process_command_response(unsigned char *buffer);
@@ -455,8 +455,6 @@ void protocol2_high_priority() {
             break;
         }
 */
-          // Apply frequency calibration offset
-          rxFrequency+=radio->frequency_calibration_offset;
           phase=(long)((4294967296.0*(double)rxFrequency)/122880000.0);
           high_priority_buffer_to_radio[9+(radio->receiver[r]->channel*4)]=phase>>24;
           high_priority_buffer_to_radio[10+(radio->receiver[r]->channel*4)]=phase>>16;
@@ -482,8 +480,6 @@ void protocol2_high_priority() {
           if(radio->transmitter->xit_enabled) {
             txFrequency+=radio->transmitter->xit;
           }
-          // Apply frequency calibration offset
-          txFrequency+=radio->frequency_calibration_offset;
         }
         switch(radio->transmitter->rx->mode_a) {
           case CWU:
@@ -499,8 +495,8 @@ void protocol2_high_priority() {
         phase=(long)((4294967296.0*(double)txFrequency)/122880000.0);
         }
 
-#ifdef PURESIGNAL
-      if(isTransmitting(radio) && radio->transmitter->puresignal) {
+#ifdef PURESIGNAL_P2
+      if(isTransmitting(radio) && (radio->transmitter->puresignal != NULL)) {
         // set puresignal rx to transmit frequency
         high_priority_buffer_to_radio[9]=phase>>24;
         high_priority_buffer_to_radio[10]=phase>>16;
@@ -539,7 +535,7 @@ void protocol2_high_priority() {
       int power=0;
       if(isTransmitting(radio)) {
         if(radio->tune && !radio->transmitter->tune_use_drive) {
-          power=(int)radio->transmitter->tune_percent;
+          power=(int)(radio->transmitter->drive/100.0*radio->transmitter->tune_percent);
         } else {
           power=(int)radio->transmitter->drive;
         }
@@ -559,33 +555,48 @@ void protocol2_high_priority() {
       }
 
       level=(int)(actual_volts*255.0);
-      g_print("protocol2_high_priority: band=%d %s level=%d\n",radio->transmitter->rx->band_a, band->title, level);
+g_print("protocol2_high_priority: band=%d %s level=%d\n",radio->transmitter->rx->band_a, band->title, level);
     }
 
     high_priority_buffer_to_radio[345]=level&0xFF;
 
     if(radio->transmitter->rx!=NULL) {
       if(isTransmitting(radio)) {
-        band = band_get_band(radio->transmitter->rx->split ? 
-                            radio->transmitter->rx->band_b : 
-                            radio->transmitter->rx->band_a);
-
-        high_priority_buffer_to_radio[1401] = band->OCtx << 1;
-        if (radio->tune) {
-            high_priority_buffer_to_radio[1401] |= radio->oc_tune << 1;
+        //high_priority_buffer_to_radio[1401]=band->OCtx<<1;
+        if(radio->tune) {
+/*
+          if(OCmemory_tune_time!=0) {
+            struct timeval te;
+            gettimeofday(&te,NULL);
+            long long now=te.tv_sec*1000LL+te.tv_usec/1000;
+            if(tune_timeout>now) {
+              high_priority_buffer_to_radio[1401]|=OCtune<<1;
+            }
+          } else {
+            high_priority_buffer_to_radio[1401]|=OCtune<<1;
+          }
+*/
         }
-    } else {
-        band = band_get_band(radio->transmitter->rx->band_a);
-        high_priority_buffer_to_radio[1401] = band->OCrx << 1;
+      } else {
+        band=band_get_band(radio->transmitter->rx->band_a);
+        high_priority_buffer_to_radio[1401]=band->OCrx<<1;
+      }
+/* 
+      if(radio->discovered->device==NEW_DEVICE_ATLAS) {
+        for(r=0;r<radio->discovered->supported_receivers;r++) {
+          high_priority_buffer_to_radio[1403]|=radio->receiver[i]->preamp;
+        }
+      }
+*/
     }
 
-  }
+
     long filters=0x00000000;
 
     if(isTransmitting(radio)) {
       filters=0x08000000;
-#ifdef PURESIGNAL
-      if(radio->transmitter->puresignal) {
+#ifdef PURESIGNAL_P2
+      if(radio->transmitter->puresignal != NULL) {
         filters|=0x00040000;
       }
 #endif
@@ -995,8 +1006,8 @@ void protocol2_receive_specific() {
     }
   }
 
-#ifdef PURESIGNAL
-    if(radio->transmitter->puresignal && isTransmitting(radio)) {
+#ifdef PURESIGNAL_P2
+    if((radio->transmitter->puresignal != NULL) && isTransmitting(radio)) {
       int ps_rate=192000;
 
       receive_specific_buffer[5]|=radio->dither<<radio->receiver[i]->channel; // dither enable
@@ -1177,9 +1188,7 @@ fprintf(stderr,"protocol2_thread: high_priority_addr setup for port %d\n",HIGH_P
               free(buffer);
               break;
             case MIC_LINE_TO_HOST_PORT:
-              if (radio->local_microphone==FALSE) {
-                process_mic_data(bytesread,buffer);
-              }
+              process_mic_data(bytesread,buffer);
               free(buffer);
               break;
             default:
@@ -1249,7 +1258,7 @@ static void process_iq_data(RECEIVER *rx,unsigned char *buffer) {
   }
 }
 
-#ifdef PURESIGNAL
+#ifdef PURESIGNAL_P2
 static void process_ps_iq_data(RECEIVER *rx) {
   long sequence;
   long long timestamp;

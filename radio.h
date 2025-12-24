@@ -21,12 +21,17 @@
 #define RADIO_H
 
 #define MAX_RECEIVERS 8
+#define MAX_DIVERSITY_MIXERS 2
 
 #define MAX_BUFFER_SIZE 2048
 
 #define TRANSMITTER_CHANNEL 8
 #define WIDEBAND_CHANNEL 9
 #define BPSK_CHANNEL 10
+
+#include "diversity_mixer.h"
+#include "hl2.h"
+#include "band.h"
 
 enum {
   ANAN_10=0,
@@ -53,7 +58,8 @@ enum {
   NONE=0,
   ALEX,
   APOLLO,
-  N2ADR
+  N2ADR,
+  HL2_MRF101
 };
 
 enum {
@@ -68,6 +74,13 @@ enum {
   REGION_UK
 };
 
+#ifdef CWDAEMON
+enum {
+  CWGEN_RADIO = 0,
+  CWGEN_PC
+};
+#endif
+
 typedef struct _radio {
   DISCOVERED *discovered;
   gboolean can_transmit;
@@ -75,9 +88,12 @@ typedef struct _radio {
   gint sample_rate;
   gint buffer_size;
   gint receivers;
+  gint diversity_mixers;
   RECEIVER *receiver[MAX_RECEIVERS];
   TRANSMITTER *transmitter;
+  HERMESLITE2 *hl2;
   RECEIVER *active_receiver;
+  DIVMIXER *divmixer[MAX_DIVERSITY_MIXERS+1];
   gint alex_rx_antenna;
   gint alex_tx_antenna;
   gdouble meter_calibration;
@@ -98,9 +114,15 @@ typedef struct _radio {
   gboolean cw_breakin;
   gboolean cwdaemon;
   
+  gdouble protocol1_timer;
+  gdouble hang_time_ctr;
+  
   #ifdef CWDAEMON
+  gboolean cw_generation_mode;
+  
   gint cwdaemon_running;
   gint cwd_port;
+  gboolean cwd_sidetone;
 
   struct sockaddr_in request_addr;
   socklen_t request_addrlen;
@@ -120,6 +142,8 @@ typedef struct _radio {
   gboolean input_started;
   GMutex ring_buffer_mutex;
   GCond ring_buffer_cond;
+  
+  GMutex delete_rx_mutex;  
   
 #ifndef __APPLE__
   pa_simple* microphone_stream;
@@ -166,8 +190,6 @@ typedef struct _radio {
   gint atlas_clock_source_10mhz;
   gboolean atlas_clock_source_128mhz;
 
-  gboolean penelope;
-
   gboolean classE;
 
   guchar oc_tune;
@@ -177,8 +199,6 @@ typedef struct _radio {
   long long tune_timeout;
 
   gint filter_board;
-  gboolean enable_pa;
-  gboolean psu_clk;
 
   gboolean display_filled;
 
@@ -192,7 +212,15 @@ typedef struct _radio {
   GtkWidget *drive_level;
 
   GtkWidget *dialog;
+  
+  GtkWidget *txmeter_info;
+  cairo_surface_t *meter_surface;
 
+  GtkWidget *oc_rx_b[BANDS * 8];
+  GtkWidget *oc_tx_b[BANDS * 8];  
+  gulong *oc_tx_signal_id;
+  gulong *oc_rx_signal_id;
+  
   ADC adc[2];
   DAC dac[2];
 
@@ -213,8 +241,8 @@ typedef struct _radio {
 
   gboolean midi_enabled;
   char midi_filename[128];
-  GtkWidget *mic_meter;
-  long long frequency_calibration_offset;
+  
+  gboolean qos_flag;
 
 } RADIO;
 
@@ -223,7 +251,10 @@ extern int radio_start(void *data);
 extern gboolean isTransmitting(RADIO *r);
 extern RADIO *create_radio(DISCOVERED *d);
 extern void delete_receiver(RECEIVER *rx);
+extern void delete_diversity_mixer(DIVMIXER *dmix);
 extern void frequency_changed(RECEIVER *rx);
+extern int add_receiver(void *data, gboolean show_rx);
+extern int add_diversity_mixer(void *data, RECEIVER *rx_visual, RECEIVER *rx_hidden); // TODO - does this *need* a prototype?
 extern void add_receivers(RADIO *r);
 extern void add_transmitter(RADIO *r);
 extern void radio_save_state(RADIO *radio);
@@ -238,4 +269,7 @@ extern void radio_change_region(RADIO *r);
 extern void radio_change_audio(RADIO *r,int selected);
 extern void radio_change_audio_backend(RADIO *r,int selected);
 extern void update_radio(RADIO *radio);
+#ifdef CWDAEMON
+extern void radio_change_cwgeneration(RADIO *r);
+#endif
 #endif

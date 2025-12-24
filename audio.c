@@ -350,7 +350,7 @@ g_print("audio_open_output: ALSA: %s\n",rx->audio_name);
       unsigned int rate = 48000;
       unsigned int channels=2;
       int soft_resample=1;
-      unsigned int latency=200000;      
+      unsigned int latency=125000;      
       
       if(rx->audio_name==NULL) {
         rx->local_audio=0;
@@ -622,19 +622,17 @@ g_print("audio_open_input: cannot find usable format\n");
 g_print("audio_open_input: format=%d\n",record_audio_format);
 
       switch(record_audio_format) {
-/*
         case SND_PCM_FORMAT_S16_LE:
 g_print("audio_open_input: mic_buffer: size=%d channels=%d sample=%ld bytes\n",r->local_microphone_buffer_size,channels,sizeof(gint16));
-          r->local_microphone_buffer=g_new(gint16, r->local_microphone_buffer_size);
+          r->local_microphone_buffer=(float *)g_new(gint16, r->local_microphone_buffer_size);
           break;
         case SND_PCM_FORMAT_S32_LE:
 g_print("audio_open_input: mic_buffer: size=%d channels=%d sample=%ld bytes\n",r->local_microphone_buffer_size,channels,sizeof(gint32));
-          r->local_microphone_buffer=g_new(gint32, r->local_microphone_buffer_size);
+          r->local_microphone_buffer=(float *)g_new(gint32, r->local_microphone_buffer_size);
           break;
-*/
         case SND_PCM_FORMAT_FLOAT_LE:
 g_print("audio_open_input: mic_buffer: size=%d channels=%d sample=%ld bytes\n",r->local_microphone_buffer_size,channels,sizeof(gfloat));
-          r->local_microphone_buffer=g_new(gfloat, r->local_microphone_buffer_size);
+          r->local_microphone_buffer=(float *)g_new(gfloat, r->local_microphone_buffer_size);
           break;
           
         default: return -1;          
@@ -765,37 +763,6 @@ g_print("audio_close_input: free mic buffer\n");
 #endif
   }
 }
-
-/* Unused function
-int audio_write_buffer(RECEIVER *rx) {
-  int rc;
-  int err;
-  switch(radio->which_audio) {
-    case USE_SOUNDIO:
-      g_mutex_lock(&rx->local_audio_mutex);
-      char *buf = soundio_ring_buffer_write_ptr(rx->ring_buffer);
-      int fill_count = rx->output_samples*sizeof(float)*2;
-      memcpy(buf, rx->local_audio_buffer, fill_count);
-      soundio_ring_buffer_advance_write_ptr(rx->ring_buffer, fill_count);
-      g_mutex_unlock(&rx->local_audio_mutex);
-      break;
-#ifndef __APPLE__
-    case USE_PULSEAUDIO:
-      g_mutex_lock(&rx->local_audio_mutex);
-      rc=pa_simple_write(rx->playstream,
-                             rx->local_audio_buffer,
-                             rx->output_samples*sizeof(float)*2,
-                             &err);
-      if(rc!=0) {
-        fprintf(stderr,"audio_write buffer=%p length=%d returned %d err=%d\n",rx->local_audio_buffer,rx->output_samples,rc,err);
-      } 
-      g_mutex_unlock(&rx->local_audio_mutex);
-      break;
-#endif
-  }
-  return rc;
-}
-*/
 
 void audio_start_output(RECEIVER *rx) {
   int err;
@@ -1037,7 +1004,7 @@ fprintf(stderr,"mic_read_thread: ALSA: mic_buffer_size=%d\n",radio->local_microp
                 //g_print("mic_read_thread: -EPIPE: snd_pcm_prepare\n");
                 if ((rc = snd_pcm_prepare (r->record_handle)) < 0) {
                     g_print("mic_read_thread: ALSA: cannot prepare audio interface for use %d (%s)\n", rc, snd_strerror (rc));
-                    return NULL;
+                    //return rc;
                 }
               } else {
                 fprintf (stderr, "mic_read_thread: ALSA: read from audio interface failed (%s)\n",
@@ -1086,10 +1053,13 @@ static void source_list_cb(pa_context *context,const pa_source_info *s,int eol,v
     }
   } else if(n_input_devices<MAX_AUDIO_DEVICES) {
     input_devices[n_input_devices].name=g_new0(char,strlen(s->name)+1);
-    strncpy(input_devices[n_input_devices].name,s->name,strlen(s->name));
+    memcpy(input_devices[n_input_devices].name, s->name, strlen(s->name));
+    
     input_devices[n_input_devices].description=g_new0(char,strlen(s->description)+1);
-    strncpy(input_devices[n_input_devices].description,s->description,strlen(s->description));
+    memcpy(input_devices[n_input_devices].description,s->description, strlen(s->description));
+    
     input_devices[n_input_devices].index=s->index;
+    
     n_input_devices++;
   }
 }
@@ -1103,9 +1073,9 @@ static void sink_list_cb(pa_context *context,const pa_sink_info *s,int eol,void 
     op=pa_context_get_source_info_list(pa_ctx,source_list_cb,NULL);
   } else if(n_output_devices<MAX_AUDIO_DEVICES) {
     output_devices[n_output_devices].name=g_new0(char,strlen(s->name)+1);
-    strncpy(output_devices[n_output_devices].name,s->name,strlen(s->name));
+    memcpy(output_devices[n_output_devices].name,s->name,strlen(s->name));
     output_devices[n_output_devices].description=g_new0(char,strlen(s->description)+1);
-    strncpy(output_devices[n_output_devices].description,s->description,strlen(s->description));
+    memcpy(output_devices[n_output_devices].description,s->description,strlen(s->description));
     output_devices[n_output_devices].index=s->index;
     n_output_devices++;
   }
@@ -1191,9 +1161,9 @@ g_print("audio: create_audio: USE_SOUNDIO: %d %s\n",soundio_get_backend(soundio,
           }
 
           output_devices[n_output_devices].name=g_new0(char,strlen(device->name)+1);
-          strncpy(output_devices[n_output_devices].name,device->name,strlen(device->name));
+          memcpy(output_devices[n_output_devices].name,device->name,strlen(device->name));
           output_devices[n_output_devices].description=g_new0(char,strlen(device->name)+1);
-          strncpy(output_devices[n_output_devices].description,device->name,strlen(device->name));
+          memcpy(output_devices[n_output_devices].description,device->name,strlen(device->name));
           output_devices[n_output_devices].index=i;
           soundio_device_unref(device);
           n_output_devices++;
@@ -1204,9 +1174,9 @@ g_print("audio: create_audio: USE_SOUNDIO: %d %s\n",soundio_get_backend(soundio,
         if(n_input_devices<MAX_AUDIO_DEVICES) {
           struct SoundIoDevice *device=soundio_get_input_device(soundio,i);
           input_devices[n_input_devices].name=g_new0(char,strlen(device->name)+1);
-          strncpy(input_devices[n_input_devices].name,device->name,strlen(device->name));
+          memcpy(input_devices[n_input_devices].name,device->name,strlen(device->name));
           input_devices[n_input_devices].description=g_new0(char,strlen(device->name)+1);
-          strncpy(input_devices[n_input_devices].description,device->name,strlen(device->name));
+          memcpy(input_devices[n_input_devices].description,device->name,strlen(device->name));
           input_devices[n_input_devices].index=i;
           soundio_device_unref(device);
           n_input_devices++;

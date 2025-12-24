@@ -29,45 +29,6 @@
 
 typedef enum {SPLIT_OFF, SPLIT_ON, SPLIT_SAT, SPLIT_RSAT} split_type;
 
-typedef struct {
-    gdouble *buffer;        // Buffer for I and Q samples (interleaved)
-    int size;               // Total number of samples (I + Q pairs)
-    int head;               // Write position (index for next write)
-    int tail;               // Read position (index for next read)
-    GMutex mutex;           // Mutex for thread safety
-    int count;              // Number of samples currently in buffer
-} RingBuffer;
-
-typedef struct _meter_cache {
-    cairo_surface_t *static_surface; // Cache for static meter elements
-    int width;
-    int height;
-} MeterCache;
-
-
-typedef struct {
-    GThread *wdsp_thread;       // Thread for WDSP processing
-    GAsyncQueue *iq_queue;      // Queue for IQ samples
-    GThread *render_thread;     // Thread for rendering
-    GAsyncQueue *render_queue;  // Queue for render tasks
-    GMutex render_mutex;        // Mutex for rendering
-    gboolean running;           // Running state for threads
-} ReceiverThreadContext;
-
-typedef struct {
-  cairo_surface_t *static_surface;
-  int width;
-  int height;
-  int zoom;
-  long long frequency_a;
-  int sample_rate;
-  int band_a;
-  int pan;
-  int panadapter_high;
-  int panadapter_low;
-  int panadapter_step;
-} PanadapterCache;
-
 typedef struct _receiver {
   
   gint channel; // WDSP channel
@@ -86,6 +47,8 @@ typedef struct _receiver {
 
   guint32 iq_sequence;
   gdouble *iq_input_buffer;
+  gdouble *diviq_input_buffer;  
+  
   guint32 audio_sequence;
   gdouble *audio_output_buffer;
   gint audio_buffer_size;
@@ -141,6 +104,8 @@ typedef struct _receiver {
   gint filter_low_a;
   gint filter_high_a;
   gint deviation;
+  gboolean squelch_enable;
+  gdouble squelch;
 
   gint filter_low_b;
   gint filter_high_b;
@@ -289,6 +254,8 @@ typedef struct _receiver {
   gboolean subrx_enable;
   void *subrx;
 
+  int resample_step;
+
   void *resampler;
   gdouble *resampled_buffer;
   gint resampled_buffer_size;
@@ -300,8 +267,15 @@ typedef struct _receiver {
   gulong local_audio_signal_id;
   gulong tx_control_signal_id;
 
+  gboolean show_rx;
+  gboolean diversity; 
+  gint diversity_hidden_rx;
+  gint dmix_id;
+
+
   gint rigctl_port;
   gboolean rigctl_enable;
+  gboolean cat_client_connected;
 
   GtkWidget *serial_port_entry;
   char rigctl_serial_port[80];
@@ -312,31 +286,7 @@ typedef struct _receiver {
   gboolean rigctl_debug;
   void *rigctl;
 
-  gdouble nr2_trained_threshold;
-  gdouble nr2_trained_t2;
-  gint nb2_mode;
-  gdouble nb_tau;
-  gdouble nb_advtime;
-  gdouble nb_hang;
-  gdouble nb_thresh;
-
-  ReceiverThreadContext thread_context;
-  PanadapterCache panadapter_cache;
-  MeterCache meter_cache;
-  RingBuffer iq_ring_buffer;
-
-  int waterfall_pan; // Add this
-  int waterfall_zoom; // Add this
-
-  double smax;
-
-
 } RECEIVER;
-
-typedef struct {
-    RECEIVER *rx;
-} DeleteReceiverData;
-
 
 
 enum {
@@ -345,10 +295,12 @@ enum {
   AUDIO_RIGHT_ONLY = 2
 };
 
-extern RECEIVER *create_receiver(int channel,int sample_rate);
+extern RECEIVER *create_receiver(int channel,int sample_rate, gboolean show_rx);
 extern void receiver_update_title(RECEIVER *rx);
 extern void receiver_init_analyzer(RECEIVER *rx);
 extern void add_iq_samples(RECEIVER *r,double left,double right);
+extern void full_diviqrx_buffer(RECEIVER *rx);
+
 extern gboolean receiver_button_press_event_cb(GtkWidget *widget, GdkEventButton *event, gpointer data);
 extern gboolean receiver_button_release_event_cb(GtkWidget *widget, GdkEventButton *event, gpointer data);
 extern gboolean receiver_motion_notify_event_cb(GtkWidget *widget, GdkEventMotion *event, gpointer data);
@@ -360,6 +312,7 @@ extern void receiver_band_changed(RECEIVER *rx,int band);
 extern void receiver_xvtr_changed(RECEIVER *rx);
 extern void set_filter(RECEIVER *rx,int low,int high);
 extern void set_deviation(RECEIVER *rx);
+extern void set_squelch(RECEIVER *rx);
 
 extern void update_noise(RECEIVER *rx);
 

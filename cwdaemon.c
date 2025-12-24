@@ -95,7 +95,7 @@
 #define CWDAEMON_MORSE_WEIGHTING_MAX           50
 
 #define CWDAEMON_NETWORK_PORT_DEFAULT                  6789
-#define CWDAEMON_AUDIO_SYSTEM_DEFAULT      CW_AUDIO_PA /* Console buzzer, from libcw.h. */
+#define CWDAEMON_AUDIO_SYSTEM_DEFAULT      CW_AUDIO_NULL /* Console buzzer, from libcw.h. */
 #define CWDAEMON_VERBOSITY_DEFAULT     CWDAEMON_VERBOSITY_W /* Threshold of verbosity of debug strings. */
 
 #define CWDAEMON_USECS_PER_MSEC         1000 /* Just to avoid magic numbers. */
@@ -106,10 +106,12 @@
 #define CWDAEMON_TUNE_SECONDS_MAX  10 /* Maximal time of tuning. TODO: why the limitation to 10 s? Is it enough? */
 
 GMutex cwdaemon_mutex;
+static GThread *cwdaemon_thread_id;
 
 bool keytx;
 bool keysidetone;
 
+double cwd_changed_at;
 
 /* Default values of parameters, may be modified only through
    command line arguments passed to cwdaemon.
@@ -283,7 +285,6 @@ static int  cwdaemon_params_pttdelay(int *delay, const char *optarg);
 static bool cwdaemon_params_volume(int *volume, const char *optarg);
 static bool cwdaemon_params_weighting(int *weighting, const char *optarg);
 static bool cwdaemon_params_tone(int *tone, const char *optarg);
-static bool cwdaemon_params_system(int *system, const char *optarg);
 static bool cwdaemon_params_ptt_on_off(const char *optarg);
 
 /* Auto, manual, echo. */
@@ -427,7 +428,6 @@ void cwdaemon_reset_almost_all(void)
 	current_morse_speed  = default_morse_speed;
 	current_morse_tone   = default_morse_tone;
 	current_morse_volume = default_morse_volume;
-	current_audio_system = default_audio_system;
 	current_ptt_delay    = default_ptt_delay;
 	current_weighting    = default_weighting;
 
@@ -512,7 +512,7 @@ void cwdaemon_reset_libcw_output(void)
 
 	printf("setting sound system \"%s\"", cw_get_audio_system_label(default_audio_system));
 
-	if (cwdaemon_open_libcw_output(default_audio_system)) {
+	if (cwdaemon_open_libcw_output(current_audio_system)) {
 		has_audio_output = true;
 	} else {
 		has_audio_output = false;
@@ -780,6 +780,7 @@ int cwdaemon_receive(void)
 void cwdaemon_handle_escaped_request(char *request)
 {
 	/* Take action depending on Escape code. */
+  printf("Code %i\n", (int) request[1]);
 	switch ((int) request[1]) {
 	case '0':
 		/* Reset all values. */
@@ -833,7 +834,7 @@ void cwdaemon_handle_escaped_request(char *request)
 			printf("requested aborting of message - executing (character mode is active)");
 			if (ptt_flag & PTT_ACTIVE_ECHO) {
 				printf("echo \"break\"");
-				cwdaemon_sendto("break\r\n");
+				//cwdaemon_sendto("break\r\n");
 			}
 			request_queue[0] = '\0';
 			cw_flush_tone_queue();
@@ -889,6 +890,7 @@ void cwdaemon_handle_escaped_request(char *request)
 		break;
 	case 'c':
 		{
+      printf("Why am I tuning?");
 			/* FIXME: change this uint32_t to size_t. */
 			uint32_t seconds = 0;
 			/* Tune for a number of seconds. */
@@ -941,63 +943,6 @@ void cwdaemon_handle_escaped_request(char *request)
 		break;
 	case 'f': {
       break;
-		/* Change sound system used by libcw. */
-		/* FIXME: if "request+2" describes unavailable sound system,
-		   cwdaemon fails to open the new sound system. Since
-		   the old one is closed with cwdaemon_close_libcw_output(),
-		   cwdaemon has no working sound system, and is unable to
-		   play sound.
-
-		   This can be fixed either by querying libcw if "request+2"
-		   sound system is available, or by first trying to
-		   open new sound system and then - on success -
-		   closing the old one. In either case cwdaemon would
-		   require some method to inform client about success
-		   or failure to open new sound system.	*/
-		if (cwdaemon_params_system(&current_audio_system, request + 2)) {
-			/* Handle valid request for changing sound system. */
-			cwdaemon_close_libcw_output();
-
-			if (cwdaemon_open_libcw_output(current_audio_system)) {
-				has_audio_output = true;
-			} else {
-				/* Fall back to NULL audio system. */
-				cwdaemon_close_libcw_output();
-				if (cwdaemon_open_libcw_output(CW_AUDIO_NULL)) {
-					printf("fall back to \"Null\" sound system");
-					current_audio_system = CW_AUDIO_PA;
-					has_audio_output = true;
-				} else {
-					printf(
-						       "failed to fall back to \"Null\" sound system");
-					has_audio_output = false;
-				}
-			}
-
-			if (has_audio_output) {
-
-				/* Tone queue is bound to a
-				   generator. Creating new generator
-				   requires re-registering the
-				   callback. */
-				cw_register_tone_queue_low_callback(cwdaemon_tone_queue_low_callback, NULL, tq_low_watermark);
-
-				/* This call recalibrates length of
-				   dot and dash. */
-				cw_set_frequency(current_morse_tone);
-
-				cw_set_send_speed(current_morse_speed);
-				cw_set_volume(current_morse_volume);
-
-				/* Regardless if we are using
-				   "default" or "current" parameters,
-				   the gap is always zero. */
-				cw_set_gap(0);
-
-				cw_set_weighting(current_weighting * 0.6 + CWDAEMON_MORSE_WEIGHTING_MAX);
-			}
-		}
-		break;
 	}
 	case 'g':
 		/* Set volume of sound, in percents. */
@@ -1019,7 +964,7 @@ void cwdaemon_handle_escaped_request(char *request)
 		   the client didn't specify reply text, the 'h' will
 		   be the only content of server's reply. */
 
-		cwdaemon_prepare_reply(reply_buffer, request + 1, strlen(request + 1));
+		//cwdaemon_prepare_reply(reply_buffer, request + 1, strlen(request + 1));
 		printf("reply is ready, waiting for message from client (reply: \"%s\")", reply_buffer);
 		/* cwdaemon will wait for queue-empty callback before
 		   sending the reply. */
@@ -1153,14 +1098,13 @@ void cwdaemon_keyingevent(__attribute__((unused)) void *arg, int keystate)
 	} else {
     keytx = false;
 	}
-  g_mutex_unlock(&cwdaemon_mutex);   
+  g_mutex_unlock(&cwdaemon_mutex);
+  cwd_changed_at = read_time_now();
+     
 	inactivity_seconds = 0;
-
-	printf("keying event \"%d\"\n", keystate);
 
 	return;
 }
-
 
 /**
    \brief Callback routine called when tone queue is empty
@@ -1265,9 +1209,6 @@ void cwdaemon_tone_queue_low_callback(__attribute__((unused)) void *arg)
 
 }
 
-
-
-
 bool cwdaemon_params_wpm(int *wpm, const char *optarg)
 {
 	long lv = 0;
@@ -1282,7 +1223,6 @@ bool cwdaemon_params_wpm(int *wpm, const char *optarg)
 		return true;
 	}
 }
-
 
 bool cwdaemon_params_tune(uint32_t *seconds, const char *optarg)
 {
@@ -1302,7 +1242,6 @@ bool cwdaemon_params_tune(uint32_t *seconds, const char *optarg)
 		return true;
 	}
 }
-
 
 /**
    \brief Handle parameter specifying PTT Turn On Delay
@@ -1385,7 +1324,6 @@ int cwdaemon_params_pttdelay(int *delay, const char *optarg)
 	}
 }
 
-
 bool cwdaemon_params_volume(int *volume, const char *optarg)
 {
 	long lv = 0;
@@ -1432,7 +1370,6 @@ bool cwdaemon_params_tone(int *tone, const char *optarg)
 	}
 }
 
-
 bool cwdaemon_params_set_verbosity(int *verbosity, const char *optarg)
 {
 	if (!strcmp(optarg, "n") || !strcmp(optarg, "N")) {
@@ -1453,33 +1390,6 @@ bool cwdaemon_params_set_verbosity(int *verbosity, const char *optarg)
 	printf("requested verbosity level threshold: \"%s\"", cwdaemon_verbosity_labels[*verbosity]);
 	return true;
 }
-
-
-bool cwdaemon_params_system(int *system, const char *optarg)
-{
-	if (!strncmp(optarg, "n", 1)) {
-		*system = CW_AUDIO_NULL;
-	} else if (!strncmp(optarg, "c", 1)) {
-		*system = CW_AUDIO_CONSOLE;
-	} else if (!strncmp(optarg, "s", 1)) {
-		*system = CW_AUDIO_SOUNDCARD;
-	} else if (!strncmp(optarg, "a", 1)) {
-		*system = CW_AUDIO_ALSA;
-	} else if (!strncmp(optarg, "p", 1)) {
-		*system = CW_AUDIO_PA;
-	} else if (!strncmp(optarg, "o", 1)) {
-		*system = CW_AUDIO_OSS;
-	} else {
-		/* TODO: print only those audio systems that are
-		   supported on given machine. */
-		printf("Invalid requested sound system\n");
-		return false;
-	}
-
-	printf("Requested sound system: \"%s\" (\"%s\")\n", optarg, cw_get_audio_system_label(*system));
-	return true;
-}
-
 
 bool cwdaemon_params_ptt_on_off(const char *optarg)
 {
@@ -1536,23 +1446,31 @@ extern gpointer cwdaemon_thread(gpointer data)
 		//exit(EXIT_FAILURE);
 	}
   
+  // Read the settings set from radio_dialog.c
+  RADIO *radio=(RADIO *)data;  
+  
+  if (radio->cwd_sidetone) {
+    printf("Pulse\n");
+    current_audio_system = CW_AUDIO_PA;
+  }
+  else {
+    printf("Null\n");    
+    current_audio_system = CW_AUDIO_NULL;    
+  }
+    
 
 	// Initialize libcw 
 	cwdaemon_reset_almost_all();
   
-  // Read the settings set from radio_dialog.c
-  RADIO *radio=(RADIO *)data;
-
   printf("\n");
 	current_morse_speed  = radio->cw_keyer_speed;
 	current_morse_tone   = radio->cw_keyer_sidetone_frequency;
 	current_morse_volume = (int)((((float)(radio->cw_keyer_sidetone_volume)/300)) * 100);
 	current_weighting    = (radio->cw_keyer_weight)-50;  
-  
+
   printf("Speed %d\n", current_morse_speed);
   printf("Tone %d\n", current_morse_tone);  
   printf("Vol %d\n", current_morse_volume);  
-  
   
 	cw_set_frequency(current_morse_tone);
 	cw_set_send_speed(current_morse_speed);
@@ -1653,7 +1571,6 @@ bool cwdaemon_initialize_socket(void)
 }
 
 void cwdaemon_stop(void) {
-  
   g_mutex_lock(&cwdaemon_mutex); 
   radio->cwdaemon_running = FALSE;
   g_mutex_unlock(&cwdaemon_mutex);   
@@ -1665,12 +1582,24 @@ void cwdaemon_stop(void) {
   g_print("cwd run %d\n", radio->cwdaemon_running);  
 }
 
-void cwdaemon_close_socket(void)
-{
+
+int cwdaemon_start(void) {
+  g_print("Starting CWdaemon\n");
+  cwdaemon_thread_id = g_thread_new("cwdaemon thread...", cwdaemon_thread, (gpointer)radio);
+  int running = TRUE;
+  if(!cwdaemon_thread_id) {
+    fprintf(stderr,"g_thread_new failed on cwdaemon_thread\n");
+    running = FALSE;
+  }
+  fprintf(stderr, "cwdaemon_thread: id=%p\n",cwdaemon_thread_id);    
+  return running;
+}
+
+void cwdaemon_close_socket(void) {
   g_print("Close cwdaemon socket\n");
 	if (radio->socket_descriptor) {
 		if (close(radio->socket_descriptor) == -1) {
-			printf("Close socket\n");
+			g_print("Close socket\n");
 			//exit(EXIT_FAILURE);
 		}
     radio->socket_descriptor = -1;
